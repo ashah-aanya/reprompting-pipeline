@@ -1,7 +1,7 @@
 from aimon.reprompting_api.config import RepromptingConfig, StopReasons
 from aimon.reprompting_api.telemetry import TelemetryLogger
 from aimon.reprompting_api.reprompter import Reprompter
-from aimon.reprompting_api.utils import toxicity_check, get_failed_instructions_count, get_failed_instructions
+from aimon.reprompting_api.utils import toxicity_check, get_failed_instructions_count, get_failed_instructions, get_residual_error_score
 from aimon import Detect
 import time
 import logging
@@ -72,11 +72,13 @@ class RepromptingPipeline:
         """
         # key: iteration number, value: dict with output and error
         iteration_outputs = {}
+        telemetry_data = []
         
         start = time.time()
         # Initial prompt and response
         curr_prompt = self.gen_prompt(context, user_query, user_instructions)
         ## call llm
+        ## need to wrap in a try-except block to handle LLM errors
         curr_generated_text = self.llm_fn(curr_prompt)
 
         logger.info("=== Prompt ===")
@@ -98,20 +100,22 @@ class RepromptingPipeline:
 
         # Initialize iteration variables
         iteration_num = 1
-
-        # Store all telemetry per iteration
-        telemetry_data = []
+        
         # Scores and errors for telemetry
         scores, errors = self.gen_error_vector(curr_result)
 
         ## update map with current iteration
         iteration_outputs[iteration_num] = {
             "response_text": curr_generated_text,
-            "residual_error_score": self.reprompter.get_residual_error_score(curr_result),
-            "failed_instructions_count": self.reprompter.get_failed_instructions_count(curr_result)
+            "residual_error_score": get_residual_error_score(curr_result),
+            "failed_instructions_count": get_failed_instructions_count(curr_result)
         }
-
-        while not self.end_reprom(curr_result, iteration_num):
+        
+        stop_reason = None
+        while True:
+            should_stop, stop_reason = self.end_reprom(curr_result, iteration_num)
+            if should_stop:
+                break
 
             ## emit telemetry information
             telemetry_entry = {
@@ -121,9 +125,9 @@ class RepromptingPipeline:
                 "response_tokens": response_tokens,
                 "scores": scores,
                 "error_vector": errors,
-                "residual_error": self.reprompter.get_residual_error_score(curr_result),
+                "residual_error": get_residual_error_score(curr_result),
                 "failed_instructions_count": get_failed_instructions_count(curr_result),
-                "stop_reason": "continue",
+                "stop_reason": StopReasons.CONTINUE,
                 "prompt": curr_prompt,
                 "response_text": curr_generated_text
             }
@@ -168,7 +172,7 @@ class RepromptingPipeline:
 
             iteration_outputs[iteration_num] = {
                 "response_text": curr_generated_text,
-                "residual_error_score": self.reprompter.get_residual_error_score(curr_result),
+                "residual_error_score": get_residual_error_score(curr_result),
                 "failed_instructions_count": get_failed_instructions_count(curr_result)
             }
 
@@ -180,9 +184,9 @@ class RepromptingPipeline:
             "response_tokens": response_tokens,
             "scores": scores,
             "error_vector": errors,
-            "residual_error": self.reprompter.get_residual_error_score(curr_result),
+            "residual_error": get_residual_error_score(curr_result),
             "failed_instructions_count": get_failed_instructions_count(curr_result),
-            "stop_reason": "stop",
+            "stop_reason": stop_reason or StopReasons.UNKNOWN_ERROR,
             "prompt": curr_prompt,
             "response_text": curr_generated_text
         }
@@ -203,13 +207,10 @@ class RepromptingPipeline:
         best_output = best_iteration["response_text"]
         best_failed_count = best_iteration["failed_instructions_count"]
         
-        response = {
-            "best_response": best_output
-        }
-
+        ## building reponse
+        response = {"best_response": best_output}
         if self.config.return_telemetry:
             response["telemetry"] = telemetry_data
-
         if self.config.return_aimon_caption:
             response["caption"] = self.gen_caption(iteration_num, best_failed_count)
 

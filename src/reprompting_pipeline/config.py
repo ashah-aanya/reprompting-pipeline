@@ -17,6 +17,7 @@ class StopReasons:
     LLM_CALL_FAILED = "llm_call_failed"
     FEEDBACK_MODEL_FAILED = "feedback_model_failed"
     UNKNOWN_ERROR = "unknown_error"
+    CONTINUE = "instructions_failed_continue_reprompting" 
 
 @dataclass
 class RepromptingConfig:

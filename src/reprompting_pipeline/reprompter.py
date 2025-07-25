@@ -19,39 +19,6 @@ class Reprompter:
 
         return passed
 
-    def penalized_average(self, probs):
-        """
-        Penalize follow probabilities below 0.5 more heavily.
-        For each instruction:
-        - If follow_probability >= 0.5 → use as is
-        - If follow_probability < 0.5 → double the penalty (1 - prob) * 2
-        """
-        penalties = []
-        for p in probs:
-            if p >= 0.5:
-                penalty = 1 - p
-            else:
-                penalty = (1 - p) * 2  # heavier penalty
-            penalties.append(penalty)
-        return sum(penalties) / len(penalties)
-
-    def get_residual_error_score(self, result):
-        """
-        Calculates a residual error score based on penalized follow probabilities.
-        Heavily penalizes values < 0.5.
-        A higher score = worse response.
-        """
-        grounded_list = result.detect_response.groundedness.get("instructions_list", [])
-        grounded_probs = [item["follow_probability"] for item in grounded_list] if grounded_list else []
-        avg_grounded_penalty = self.penalized_average(grounded_probs) if grounded_probs else 0.0
-
-        adherence_list = result.detect_response.instruction_adherence.get("instructions_list", [])
-        adherence_probs = [item["follow_probability"] for item in adherence_list] if adherence_list else []
-        avg_adherence_penalty = self.penalized_average(adherence_probs) if adherence_probs else 0.0
-
-        residual_error_score = (avg_grounded_penalty + avg_adherence_penalty) / 2
-        return round(residual_error_score, 2)
-
     ## should this resurface instructions that were followed? Should this resurface context?
     def create_corrective_prompt(self, result, aimon_payload):
         failed_instructions = get_failed_instructions(result, aimon_payload)
