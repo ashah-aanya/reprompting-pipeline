@@ -1,28 +1,36 @@
-from typing import List, Union
-from pipeline import RepromptingPipeline
-from config import RepromptingConfig
-
-def normalize_context(context: Union[str, List]) -> str:
-    if isinstance(context, str):
-        return context
-    if isinstance(context, list):
-        return "\n\n".join([getattr(doc, "page_content", str(doc)) for doc in context])
-    raise ValueError("Unsupported context type.")
+from typing import List, Union, Optional
+from aimon.reprompting_api.utils import normalize_context
+from aimon.reprompting_api.pipeline import RepromptingPipeline
+from aimon.reprompting_api.config import RepromptingConfig
 
 def run_reprompting_pipeline(
     user_query: str,
     context: Union[str, List],
     llm_fn,
     user_instructions: List[str] = None,
-    reprompting_config: RepromptingConfig = None
+    reprompting_config: RepromptingConfig = None,
 ) -> dict:
-    config = reprompting_config or RepromptingConfig()
+    """
+    Runs the full re-prompting pipeline.
+
+    Args:
+        user_query (str): The query to answer.
+        context (Union[str, List]): Context (string, list, or retriever).
+        llm_fn (Callable): A function to call the LLM.
+        user_instructions (List[str], optional): Additional instructions for the LLM.
+        reprompting_config (RepromptingConfig, optional): Pipeline configuration.
+
+    Returns:
+        dict: A dictionary containing the best response, and optionally telemetry/caption.
+    """
+
+    # Normalize context for the pipeline
     context_str = normalize_context(context)
-    pipeline = RepromptingPipeline(llm_fn=llm_fn, config=config) 
-    result = pipeline.run(
+    config = reprompting_config or RepromptingConfig()
+    pipeline = RepromptingPipeline(llm_fn=llm_fn, config=config)
+    
+    return pipeline.run(
         user_query=user_query,
         context=context_str,
-        llm_fn=llm_fn,
         user_instructions=user_instructions or []
     )
-    return result

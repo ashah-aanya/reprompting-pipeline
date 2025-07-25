@@ -1,7 +1,8 @@
-from config import RepromptingConfig
+from aimon.reprompting_api.config import RepromptingConfig, StopReasons
+from aimon.reprompting_api.telemetry import TelemetryLogger
+from aimon.reprompting_api.reprompter import Reprompter
+from aimon.reprompting_api.utils import toxicity_check, get_failed_instructions_count, get_failed_instructions
 from aimon import Detect
-from telemetry import TelemetryLogger
-from reprompter import Reprompter
 import time
 import logging
 import os
@@ -26,6 +27,10 @@ class RepromptingPipeline:
         
         self.reprompter = Reprompter()
         self.telemetry = TelemetryLogger()
+
+        # Validate or set default values for configuration flags
+        self.config.return_telemetry = getattr(self.config, 'return_telemetry', False)
+        self.config.return_aimon_caption = getattr(self.config, 'return_aimon_caption', False)
 
         # AIMon Detect instance for evaluating outputs
         self.detect = Detect(
@@ -57,6 +62,158 @@ class RepromptingPipeline:
             "mistralai/Mistral-7B-v0.1",
             token=os.getenv("HUGGINGFACE_TOKEN")
         )
+        
+    def run(self, user_query, context, user_instructions):
+        """
+        Orchestrates LLM generation, reprompt loop, AIMon evaluation, telemetry.
+
+        Returns:
+            list: Telemetry data for all iterations.
+        """
+        # key: iteration number, value: dict with output and error
+        iteration_outputs = {}
+        
+        start = time.time()
+        # Initial prompt and response
+        curr_prompt = self.gen_prompt(context, user_query, user_instructions)
+        ## call llm
+        curr_generated_text = self.llm_fn(curr_prompt)
+
+        logger.info("=== Prompt ===")
+        logger.info(curr_prompt)
+        logger.info("\n=== Generated Response ===")
+        logger.info(curr_generated_text)
+
+        # Create AIMon payload and detect response
+        curr_payload = self.create_payload(context, user_query, user_instructions, curr_generated_text)
+        ## evaluate response on hallucination/groundedness, instruction adherence, and toxicity
+        curr_result = self.detect_aimon_response(curr_payload)
+
+        latency_ms = (time.time() - start) * 1000
+        # Placeholder for token counts (update if available)
+        prompt_tokens = 0
+        response_tokens = 0
+        #prompt_tokens = self.count_tokens(curr_prompt)
+        #response_tokens = self.count_tokens(curr_generated_text)
+
+        # Initialize iteration variables
+        iteration_num = 1
+
+        # Store all telemetry per iteration
+        telemetry_data = []
+        # Scores and errors for telemetry
+        scores, errors = self.gen_error_vector(curr_result)
+
+        ## update map with current iteration
+        iteration_outputs[iteration_num] = {
+            "response_text": curr_generated_text,
+            "residual_error_score": self.reprompter.get_residual_error_score(curr_result),
+            "failed_instructions_count": self.reprompter.get_failed_instructions_count(curr_result)
+        }
+
+        while not self.end_reprom(curr_result, iteration_num):
+
+            ## emit telemetry information
+            telemetry_entry = {
+                "iteration": iteration_num,
+                "latency_ms": latency_ms,
+                "prompt_tokens": prompt_tokens,
+                "response_tokens": response_tokens,
+                "scores": scores,
+                "error_vector": errors,
+                "residual_error": self.reprompter.get_residual_error_score(curr_result),
+                "failed_instructions_count": get_failed_instructions_count(curr_result),
+                "stop_reason": "continue",
+                "prompt": curr_prompt,
+                "response_text": curr_generated_text
+            }
+            telemetry_data.append(telemetry_entry)
+            self.telemetry.emit(**telemetry_entry)
+            logger.info(f"Iteration Num = {iteration_num}")
+            # Track latency per iteration
+            start = time.time()
+
+            # Generate corrective prompt
+            curr_prompt = self.gen_reprompt(curr_payload, curr_result)
+            logger.info("=== Corrective Prompt ===")
+            logger.info(curr_prompt)
+            # retrieve new response from LLM to the corrective prompt
+            curr_generated_text = self.llm_fn(curr_prompt)
+            logger.info("\n=== Generated Response ===")
+            logger.info(curr_generated_text)
+
+            # updating latency
+            latency_ms = (time.time() - start) * 1000  # update per iteration
+
+            # Create new AIMon payload with the updated prompt and response
+            # Note: This assumes the context remains the same throughout iterations
+            curr_payload = self.create_payload(context, user_query, user_instructions, curr_generated_text)
+
+            ## evaluates the new response on hallucination, instruction adherence, and toxicity
+            curr_result = self.detect_aimon_response(curr_payload)
+            logger.info("=== AIMon Result ===")
+            logger.info(curr_result)
+
+            # Real token counts if available
+            prompt_tokens = 0
+            response_tokens = 0
+            #prompt_tokens = self.count_tokens(curr_prompt)
+            #response_tokens = self.count_tokens(curr_generated_text)
+
+            # creates score and error vectors for the current result to store in telemetry
+            scores, errors = self.gen_error_vector(curr_result)
+
+            # increments iteration
+            iteration_num += 1
+
+            iteration_outputs[iteration_num] = {
+                "response_text": curr_generated_text,
+                "residual_error_score": self.reprompter.get_residual_error_score(curr_result),
+                "failed_instructions_count": get_failed_instructions_count(curr_result)
+            }
+
+        # Emit telemetry for the final iteration (stop condition)
+        telemetry_entry = {
+            "iteration": iteration_num,
+            "latency_ms": latency_ms,
+            "prompt_tokens": prompt_tokens,
+            "response_tokens": response_tokens,
+            "scores": scores,
+            "error_vector": errors,
+            "residual_error": self.reprompter.get_residual_error_score(curr_result),
+            "failed_instructions_count": get_failed_instructions_count(curr_result),
+            "stop_reason": "stop",
+            "prompt": curr_prompt,
+            "response_text": curr_generated_text
+        }
+        telemetry_data.append(telemetry_entry)
+        self.telemetry.emit(**telemetry_entry)
+
+        # retrieving the iteration with the lowest residual error score from the iteration_outputs map
+        if not iteration_outputs:
+            logger.error("No iterations were performed. Unable to determine the best output.")
+            return None  # Or handle this case as per your application's requirements
+
+        valid_iterations = [entry for entry in iteration_outputs.values() if "residual_error_score" in entry and isinstance(entry["residual_error_score"], (int, float))]
+        if not valid_iterations:
+            logger.error("No valid iterations with residual error scores found.")
+            return None  # Or handle this case as per your application's requirements
+
+        best_iteration = min(valid_iterations, key=lambda x: x["residual_error_score"])
+        best_output = best_iteration["response_text"]
+        best_failed_count = best_iteration["failed_instructions_count"]
+        
+        response = {
+            "best_response": best_output
+        }
+
+        if self.config.return_telemetry:
+            response["telemetry"] = telemetry_data
+
+        if self.config.return_aimon_caption:
+            response["caption"] = self.gen_caption(iteration_num, best_failed_count)
+
+        return response
 
     def gen_prompt(self, context, user_query, user_instructions):
         """
@@ -101,11 +258,7 @@ class RepromptingPipeline:
             'user_query': user_query,
             'generated_text': generated_text,
             'instructions': user_instructions,
-            'publish': self.config.publish
         }
-        if self.config.publish:
-            payload['application_name'] = self.config.application_name
-            payload['model_name'] = self.config.model_name
         return payload
 
     def detect_aimon_response(self, payload):
@@ -152,21 +305,6 @@ class RepromptingPipeline:
 
         return result  # Return result from last attempt
 
-
-    def toxicity_check(self, result):
-        """
-        Verifies output toxicity.
-
-        Returns:
-            bool: True if above threshold, else False.
-        """
-        toxicity = result.detect_response.toxicity["score"]
-        if toxicity > self.config.TOXICITY_THRESHOLD:
-            logger.warning(f"Toxicity score is above threshold: {toxicity}")
-            return True
-        return False
-
-        
     def gen_reprompt(self, payload, result):
         """
         Uses reprompter to generate corrective prompt.
@@ -177,24 +315,30 @@ class RepromptingPipeline:
         return self.reprompter.create_corrective_prompt(result, payload)
 
     ## latency time-out should be added
-    def end_reprom(self, payload, result, iteration_num):
+    def end_reprom(self, result, iteration_num):
         """
-        Checks reprompting termination conditions. Returns true if (a) a hard cap N iterations is reached or (b) all instructions are adhered to
-
+        Checks reprompting termination conditions. 
         Returns:
-            bool: True to stop, False to continue.
+            tuple: (should_stop: bool, stop_reason: Optional[str])
         """
+        # Max iterations reached
         if iteration_num >= self.config.max_iterations:
             logger.info(f"Reached maximum number of iterations: {iteration_num}")
-            return True
-        if self.reprompter.get_failed_instructions_count(result) > 0:
+            return True, StopReasons.MAX_ITERATIONS_REACHED
+
+        # Continue if there are still failed instructions
+        if get_failed_instructions_count(result) > 0:
             logger.info("Detected adherence/groundedness violations. Continuing reprompting.")
-            return False
-        if self.toxicity_check(result):
+            return False, None
+
+        # Continue if toxicity is detected
+        if toxicity_check(result):
             logger.info("toxicity detected. Continuing reprompting.")
-            return False
+            return False, None
+
+        # All instructions followed
         logger.info("All instructions followed; stopping reprompting.")
-        return True
+        return True, StopReasons.ALL_INSTRUCTIONS_ADHERED
     
     def gen_error_vector(self, result):
         """
@@ -207,161 +351,15 @@ class RepromptingPipeline:
             "groundedness": result.detect_response.groundedness.get("score", 0.0),
             "instruction_adherence": result.detect_response.instruction_adherence.get("score", 0.0)
         }
-        errors = self.reprompter.get_failed_instructions(result, result.detect_response)
+        errors = get_failed_instructions(result, result.detect_response)
         return scores, errors
     
-    def count_tokens(self, text):
-        
-        return len(self.tokenizer.encode(text))
-
-    def run(self, user_query, context, llm_fn, user_instructions):
-        """
-        Orchestrates LLM generation, reprompt loop, AIMon evaluation, telemetry.
-
-        Returns:
-            list: Telemetry data for all iterations.
-        """
-        # key: iteration number, value: dict with output and error
-        iteration_outputs = {}
-        
-        start = time.time()
-        # Initial prompt and response
-        curr_prompt = self.gen_prompt(context, user_query, user_instructions)
-        ## call llm
-        curr_generated_text = llm_fn(curr_prompt)
-
-        logger.info("=== Prompt ===")
-        logger.info(curr_prompt)
-        logger.info("\n=== Generated Response ===")
-        logger.info(curr_generated_text)
-
-        # Create AIMon payload and detect response
-        curr_payload = self.create_payload(context, user_query, user_instructions, curr_generated_text)
-        ## evaluate response on hallucination/groundedness, instruction adherence, and toxicity
-        curr_result = self.detect_aimon_response(curr_payload)
-
-        latency_ms = (time.time() - start) * 1000
-        # Placeholder for token counts (update if available)
-        prompt_tokens = 0
-        response_tokens = 0
-        #prompt_tokens = self.count_tokens(curr_prompt)
-        #response_tokens = self.count_tokens(curr_generated_text)
-
-        # Initialize iteration variables
-        iteration_num = 1
-
-        # Store all telemetry per iteration
-        telemetry_data = []
-        # Scores and errors for telemetry
-        scores, errors = self.gen_error_vector(curr_result)
-
-        ## update map with current iteration
-        iteration_outputs[iteration_num] = {
-            "response_text": curr_generated_text,
-            "residual_error_score": self.reprompter.get_residual_error_score(curr_result),
-            "failed_instructions_count": self.reprompter.get_failed_instructions_count(curr_result)
-        }
-
-
-        while not self.end_reprom(curr_payload, curr_result, iteration_num):
-
-            ## emit telemetry information
-            telemetry_entry = {
-                "iteration": iteration_num,
-                "latency_ms": latency_ms,
-                "prompt_tokens": prompt_tokens,
-                "response_tokens": response_tokens,
-                "scores": scores,
-                "error_vector": errors,
-                "residual_error": self.reprompter.get_residual_error_score(curr_result),
-                "failed_instructions_count": self.reprompter.get_failed_instructions_count(curr_result),
-                "stop_reason": "continue",
-                "prompt": curr_prompt,
-                "response_text": curr_generated_text
-            }
-            telemetry_data.append(telemetry_entry)
-            self.telemetry.emit(**telemetry_entry)
-            logger.info(f"Iteration Num = {iteration_num}")
-            # Track latency per iteration
-            start = time.time()
-
-            # Generate corrective prompt
-            curr_prompt = self.gen_reprompt(curr_payload, curr_result)
-            logger.info("=== Corrective Prompt ===")
-            logger.info(curr_prompt)
-            # retrieve new response from LLM to the corrective prompt
-            curr_generated_text = llm_fn(curr_prompt)
-            logger.info("\n=== Generated Response ===")
-            logger.info(curr_generated_text)
-
-            # updating latency
-            latency_ms = (time.time() - start) * 1000  # update per iteration
-
-            # Create new AIMon payload with the updated prompt and response
-            # Note: This assumes the context remains the same throughout iterations
-            curr_payload = self.create_payload(context, user_query, user_instructions, curr_generated_text)
-
-            ## evaluates the new response on hallucination, instruction adherence, and toxicity
-            curr_result = self.detect_aimon_response(curr_payload)
-            logger.info("=== AIMon Result ===")
-            logger.info(curr_result)
-
-            # Real token counts if available
-            prompt_tokens = 0
-            response_tokens = 0
-            #prompt_tokens = self.count_tokens(curr_prompt)
-            #response_tokens = self.count_tokens(curr_generated_text)
-
-            # creates score and error vectors for the current result to store in telemetry
-            scores, errors = self.gen_error_vector(curr_result)
-
-            # increments iteration
-            iteration_num += 1
-
-            iteration_outputs[iteration_num] = {
-                "response_text": curr_generated_text,
-                "residual_error_score": self.reprompter.get_residual_error_score(curr_result),
-                "failed_instructions_count": self.reprompter.get_failed_instructions_count(curr_result)
-            }
-
-
-        # Emit telemetry for the final iteration (stop condition)
-        telemetry_entry = {
-            "iteration": iteration_num,
-            "latency_ms": latency_ms,
-            "prompt_tokens": prompt_tokens,
-            "response_tokens": response_tokens,
-            "scores": scores,
-            "error_vector": errors,
-            "residual_error": self.reprompter.get_residual_error_score(curr_result),
-            "failed_instructions_count": self.reprompter.get_failed_instructions_count(curr_result),
-            "stop_reason": "stop",
-            "prompt": curr_prompt,
-            "response_text": curr_generated_text
-        }
-        telemetry_data.append(telemetry_entry)
-        self.telemetry.emit(**telemetry_entry)
-
-        # retrieving the iteration with the lowest residual error score from the iteration_outputs map
-        if not iteration_outputs:
-            logger.error("No iterations were performed. Unable to determine the best output.")
-            return None  # Or handle this case as per your application's requirements
-
-        best_iteration = min(iteration_outputs.values(), key=lambda x: x["residual_error_score"])
-        best_output = best_iteration["response_text"]
-        best_failed_count = best_iteration["failed_instructions_count"]
-        
-        response = {
-            "best_response": best_output
-        }
-
-        if self.config.return_telemetry:
-            response["telemetry"] = telemetry_data
-
-        if self.config.return_aimon_caption:
-            response["caption"] = (
+    def gen_caption(self, iteration_num, best_failed_count):
+        caption = (
                 f"Re-prompting completed in {iteration_num} iterations "
                 f"with {best_failed_count} failed instructions remaining."
             )
-
-        return response
+        return caption
+    
+    def count_tokens(self, text):
+        return len(self.tokenizer.encode(text))

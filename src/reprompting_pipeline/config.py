@@ -9,6 +9,15 @@ def generate_random_string(length):
   characters = string.ascii_letters + string.digits
   return ''.join(random.choice(characters) for i in range(length))
 
+class StopReasons:
+    ALL_INSTRUCTIONS_ADHERED = "all_instructions_adhered"
+    MAX_ITERATIONS_REACHED = "max_iterations_reached"
+    LATENCY_LIMIT_EXCEEDED = "latency_limit_exceeded"
+    TOKEN_LIMIT_EXCEEDED = "token_limit_exceeded"
+    LLM_CALL_FAILED = "llm_call_failed"
+    FEEDBACK_MODEL_FAILED = "feedback_model_failed"
+    UNKNOWN_ERROR = "unknown_error"
+
 @dataclass
 class RepromptingConfig:
     """
@@ -36,3 +45,5 @@ class RepromptingConfig:
     return_aimon_caption: bool = False
     token_limit: Optional[int] = None
     latency_limit_ms: Optional[int] = None
+    
+    
