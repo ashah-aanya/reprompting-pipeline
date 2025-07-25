@@ -12,12 +12,19 @@ def generate_random_string(length):
 class StopReasons:
     ALL_INSTRUCTIONS_ADHERED = "all_instructions_adhered"
     MAX_ITERATIONS_REACHED = "max_iterations_reached"
+    CONTINUE = "instructions_failed_continue_reprompting" 
+    
+    ## limits
     LATENCY_LIMIT_EXCEEDED = "latency_limit_exceeded"
     TOKEN_LIMIT_EXCEEDED = "token_limit_exceeded"
+    
+    ##errors
     LLM_CALL_FAILED = "llm_call_failed"
     FEEDBACK_MODEL_FAILED = "feedback_model_failed"
     UNKNOWN_ERROR = "unknown_error"
-    CONTINUE = "instructions_failed_continue_reprompting" 
+    
+class NonFatalErrors:
+    TOKENIZER_FAILED = "tokenizer_failed"
 
 @dataclass
 class RepromptingConfig:

@@ -12,7 +12,7 @@ class Reprompter:
         all_instructions = aimon_payload.get("instructions", [])
 
         # Get failed instructions from unified failure extractor
-        failed_instructions = {item["instruction"] for item in get_failed_instructions(result, aimon_payload)}
+        failed_instructions = {item["instruction"] for item in get_failed_instructions(result)}
 
         # Filter to only passed instructions
         passed = [instr for instr in all_instructions if instr not in failed_instructions]
@@ -21,7 +21,7 @@ class Reprompter:
 
     ## should this resurface instructions that were followed? Should this resurface context?
     def create_corrective_prompt(self, result, aimon_payload):
-        failed_instructions = get_failed_instructions(result, aimon_payload)
+        failed_instructions = get_failed_instructions(result)
         failed_count = get_failed_instructions_count(result)
 
         if toxicity_check(result):

@@ -1,6 +1,7 @@
 import json
 import uuid
 from datetime import datetime
+from typing import Optional, List
 from pathlib import Path
 
 class TelemetryLogger:
@@ -12,33 +13,35 @@ class TelemetryLogger:
     def emit(
         self,
         iteration: int,
-        latency_ms: float,
+        cumulative_latency_ms: float,
         prompt_tokens: int,
         response_tokens: int,
         scores: dict,
-        error_vector: dict,
+        response_feedback: dict,
         residual_error: int,
         failed_instructions_count: int,
         stop_reason: str,
         response_text: str,
         prompt: str = "",
+        non_fatal_errors: Optional[List[str]] = None,
     ):
         telemetry = {
             "timestamp": datetime.utcnow().isoformat() + "Z",
             "session_id": self.session_id,
             "iteration": iteration,
-            "latency_ms": latency_ms,
+            "cumulative_latency_ms": cumulative_latency_ms,
             "token_counts": {
                 "prompt_tokens": prompt_tokens,
                 "response_tokens": response_tokens
             },
             "scores": scores,
-            "error_vector": error_vector,
+            "response_feedback": response_feedback,
             "residual_error": residual_error,
             "failed_instructions_count": failed_instructions_count,
             "stop_reason": stop_reason,
             "prompt": prompt,
-            "response_text": response_text
+            "response_text": response_text,
+            "non_fatal_errors": non_fatal_errors or []
         }
         with open(self.log_path, "a") as f:
             f.write(json.dumps(telemetry) + "\n")

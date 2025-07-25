@@ -1,4 +1,4 @@
-from typing import List, Union, Optional
+from typing import List, Union
 from aimon.reprompting_api.utils import normalize_context
 from aimon.reprompting_api.pipeline import RepromptingPipeline
 from aimon.reprompting_api.config import RepromptingConfig

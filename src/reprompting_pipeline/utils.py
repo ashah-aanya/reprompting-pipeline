@@ -19,7 +19,7 @@ def toxicity_check(result):
         return True
     return False
     
-def get_failed_instructions(result, aimon_payload):
+def get_failed_instructions(result):
     """
     Extracts failed instructions from instruction_adherence and groundedness sections
     of the AIMon detect_response. Includes any toxicity-related instructions with
