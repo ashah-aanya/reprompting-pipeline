@@ -21,6 +21,7 @@ class StopReasons:
     ##errors
     LLM_CALL_FAILED = "llm_call_failed"
     FEEDBACK_MODEL_FAILED = "feedback_model_failed"
+    REPROMPTING_FAILED = "reprompting_failed"
     UNKNOWN_ERROR = "unknown_error"
     
 class NonFatalErrors:

@@ -12,12 +12,27 @@ logger = logging.getLogger(__name__)
 
 class RepromptingPipeline:
     """
-    Orchestrates prompt generation, LLM interaction, AIMon evaluation,
-    reprompting, and telemetry reporting.
+    A pipeline for iterative re-prompting of LLM responses using AIMon evaluation.
+    
+    This pipeline orchestrates:
+      - Initial prompt generation for a given query, context, and user instructions.
+      - Interaction with a black-box LLM to generate responses.
+      - Evaluation of responses using AIMon detectors (instruction adherence, groundedness, toxicity).
+      - Iterative corrective re-prompting until stopping conditions are met.
+      - Collection and emission of telemetry for all iterations.
+      
+    Attributes:
+        llm_fn (callable): Function to call the LLM. Must accept a string prompt and return a string response.
+        config (RepromptingConfig): Configuration object with API keys and iteration limits.
+        reprompter (Reprompter): Utility for generating corrective prompts based on evaluation feedback.
+        telemetry (TelemetryLogger): Logger for capturing telemetry data.
+        detect (Detect): AIMon detection client for evaluating model responses.
+        tokenizer (AutoTokenizer): Tokenizer used for estimating prompt/response token counts.
     """
     def __init__(self, llm_fn, config):
         """
         Initialize pipeline with LLM callable and RepromptingConfig.
+        
         Args:
             llm_fn (callable): Function to call the LLM. Signature: llm_fn(prompt: str) -> str
             config (RepromptingConfig): Configuration object with API keys and limits.
@@ -27,12 +42,11 @@ class RepromptingPipeline:
         
         self.reprompter = Reprompter()
         self.telemetry = TelemetryLogger()
-
-        # Validate or set default values for configuration flags
+        
         self.config.return_telemetry = getattr(self.config, 'return_telemetry', False)
         self.config.return_aimon_caption = getattr(self.config, 'return_aimon_caption', False)
 
-        # AIMon Detect instance for evaluating outputs
+        # AIMon Detect configuration
         self.detect = Detect(
             values_returned=['user_query', 'instructions', 'generated_text', 'context'],
             config={
@@ -55,9 +69,7 @@ class RepromptingPipeline:
             model_name = self.config.model_name,
             publish=self.config.publish
         )
-        self.telemetry = TelemetryLogger()
-
-        ## fix tokenizer logic
+        
         self.tokenizer = AutoTokenizer.from_pretrained(
             "mistralai/Mistral-7B-v0.1",
             token=os.getenv("HUGGINGFACE_TOKEN")
@@ -65,10 +77,20 @@ class RepromptingPipeline:
         
     def run(self, user_query, context, user_instructions):
         """
-        Orchestrates LLM generation, reprompt loop, AIMon evaluation, telemetry.
+        Execute the full re-prompting pipeline.
+        
+        Args:
+            user_query (str): The user's query or instruction.
+            context (str): Contextual information to include in the prompt.
+            user_instructions (list[str]): Instructions the model must follow.
 
         Returns:
-            list: Telemetry data for all iterations.
+            dict: 
+                {
+                    "best_response" (str): Best model response from all iterations.
+                    "telemetry" (list, optional): Telemetry for all iterations if enabled.
+                    "caption" (str, optional): Summary of the process if enabled.
+                }
         """
         # key: iteration number, value: dict with output and error
         iteration_outputs = {}
@@ -78,7 +100,6 @@ class RepromptingPipeline:
         cumulative_latency_ms = 0.0
         iteration_num = 1
         
-        start = time.time()
         curr_prompt = self.gen_prompt(context, user_query, user_instructions)
         
         try:
@@ -258,10 +279,18 @@ class RepromptingPipeline:
 
     def gen_prompt(self, context, user_query, user_instructions):
         """
-        Builds a prompt by clearly delineating context, query, and combined instructions.
-        Uses CSV-safe delimiters.
+        Builds initial LLM prompt by clearly delineating context, query, and combined instructions.
+        
+        Args:
+            context (str): Context for the query.
+            user_query (str): The user's query.
+            user_instructions (list[str]): Instructions for the model.
+            
+        Returns:
+            str: A formatted prompt including context, query, and instructions.
         """
         
+        ## improve this to not be hardcoded
         groundedness_instructions = [
             "Ensure that the response does not contain minor or major factual inaccuracies or completely made-up sentences when compared to the context.",
             "Ensure that the response correctly infers implicit information without introducing unsupported facts.",
@@ -286,14 +315,17 @@ class RepromptingPipeline:
         Constructs AIMon input payload.
 
         Args:
-            context: Background info given to LLM.
-            user_query: The query posed by the user.
-            user_instructions: Instruction list for LLM provided by the user.
-            generated_text: Text generated by LLM.
+            context (str): Context for the LLM.
+            user_query (str): The user's query.
+            user_instructions (list[str]): Instructions for the model.
+            generated_text (str): The model's generated response.
 
         Returns:
             dict: Payload for AIMon evaluation.
         """
+        if not isinstance(user_instructions, list):
+            logger.warning("user_instructions is not a list. Defaulting to empty list.")
+            user_instructions = []
         payload = {
             'context': context,
             'user_query': user_query,
@@ -304,10 +336,13 @@ class RepromptingPipeline:
 
     def detect_aimon_response(self, payload):
         """
-        Runs AIMon detectors on a payload.
-        Retries up to 1 additional times if any failed instructions have empty explanations.
+        Evaluate a response using AIMon detectors. Retries up to one additional time if failed instruction explanations are empty.
+        Args:
+            payload (dict): AIMon input payload.
+
+        Returns:
+            object: AIMon detection result object.
         """
-        raise RuntimeError("Simulated AIMon detection failure for testing failure handling.")
 
         aimon_context = f"{payload['context']}\n\nUser Query:\n{payload['user_query']}"
         aimon_query = f"{payload['user_query']}\n\nInstructions:\n{payload['instructions']}"
@@ -349,19 +384,29 @@ class RepromptingPipeline:
 
     def gen_reprompt(self, payload, result):
         """
-        Uses reprompter to generate corrective prompt.
+        Generate a corrective prompt using AIMon evaluation results.
+
+         Args:
+            payload (dict): AIMon input payload.
+            result (object): AIMon detection result.
 
         Returns:
-                str: New prompt.
+            str: A corrective prompt for re-prompting the LLM.
         """
         return self.reprompter.create_corrective_prompt(result, payload)
 
     ## latency time-out should be added
     def end_reprom(self, result, iteration_num):
         """
-        Checks reprompting termination conditions. 
+        Determine whether to stop re-prompting. 
+        
+        Args:
+            result (object): AIMon detection result.
+            iteration_num (int): Current iteration number.
+            
         Returns:
-            tuple: (should_stop: bool, stop_reason: Optional[str])
+            tuple: 
+                (should_stop (bool), stop_reason (str or None))
         """
         # Max iterations reached
         if iteration_num >= self.config.max_iterations:
@@ -384,10 +429,13 @@ class RepromptingPipeline:
     
     def get_response_feedback(self, result):
         """
-        Generates score dict and failed instructions.
+        Extract groundedness and instruction adherence scores and failed instructions.
+        
+        Args:
+            result (object): AIMon detection result.
 
         Returns:
-            tuple: (score dict, failed instructions list)
+            tuple: (scores (dict), failed_instructions (list))
         """
         scores = {
             "groundedness": result.detect_response.groundedness.get("score", 0.0),
@@ -397,6 +445,16 @@ class RepromptingPipeline:
         return scores, feedback
     
     def gen_caption(self, iteration_num, best_failed_count):
+        """
+        Generate a human-readable summary caption for the pipeline run.
+
+        Args:
+            iteration_num (int): Number of iterations performed.
+            best_failed_count (int): Number of failed instructions in the best response.
+
+        Returns:
+            str: Summary caption.
+        """
         caption = (
                 f"Re-prompting completed in {iteration_num} iterations "
                 f"with {best_failed_count} failed instructions remaining."
@@ -404,6 +462,15 @@ class RepromptingPipeline:
         return caption
     
     def count_tokens(self, text):
+        """
+        Count tokens in a string using the configured tokenizer.
+
+        Args:
+            text (str): Text to tokenize.
+
+        Returns:
+            int: Token count.
+        """
         return len(self.tokenizer.encode(text))
     
     def build_telemetry_entry(
@@ -421,7 +488,26 @@ class RepromptingPipeline:
         response_text,
         non_fatal_errors,
     ):
-        """Helper to build telemetry entries consistently."""
+        """
+        Build a structured telemetry entry for an iteration.
+
+        Args:
+            iteration (int): Iteration number.
+            cumulative_latency (float): Total latency in milliseconds so far.
+            prompt_tokens (int): Token count for the prompt.
+            response_tokens (int): Token count for the response.
+            scores (dict): Evaluation scores.
+            feedback (list): Failed instruction feedback.
+            residual_error (float): Residual error score.
+            failed_count (int): Number of failed instructions.
+            stop_reason (str): Reason for stopping.
+            prompt (str): Prompt used for this iteration.
+            response_text (str): Model's response.
+            non_fatal_errors (list): Non-fatal errors encountered.
+
+        Returns:
+            dict: Structured telemetry entry.
+        """
         return {
             "iteration": iteration,
             "cumulative_latency_ms": cumulative_latency,
@@ -438,7 +524,20 @@ class RepromptingPipeline:
         }
     
     def terminate_with_failure(self, stop_reason, iteration, prompt, telemetry_data, iteration_outputs, cumulative_latency_ms):
-        # Build final telemetry entry for the failure
+        """
+        Handle a fatal error by recording telemetry and returning a failure response.
+
+        Args:
+            stop_reason (str): Reason for failure.
+            iteration (int): Current iteration.
+            prompt (str): Prompt used at failure.
+            telemetry_data (list): Collected telemetry entries.
+            iteration_outputs (dict): Outputs from completed iterations.
+            cumulative_latency_ms (float): Total pipeline latency.
+
+        Returns:
+            dict: Failure response with best available output, telemetry, and caption.
+        """
         entry = self.build_telemetry_entry(
             iteration,
             cumulative_latency_ms,
