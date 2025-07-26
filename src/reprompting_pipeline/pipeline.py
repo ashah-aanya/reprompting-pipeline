@@ -106,44 +106,32 @@ class RepromptingPipeline:
             curr_generated_text = self.llm_fn(curr_prompt)
         except Exception as e:
             logger.error(f"LLM call failed: {e}")
-            cumulative_latency_ms = (time.time() - pipeline_start) * 1000
             return self.terminate_with_failure(
                 StopReasons.LLM_CALL_FAILED,
                 iteration_num,
                 curr_prompt,
                 telemetry_data,
                 iteration_outputs,
-                cumulative_latency_ms,
+                pipeline_start,
             )
-    
-        logger.info("=== Prompt ===")
-        logger.info(curr_prompt)
-        logger.info("\n=== Generated Response ===")
-        logger.info(curr_generated_text)
+
 
         # Create AIMon payload and detect response
         curr_payload = self.create_payload(context, user_query, user_instructions, curr_generated_text)
-        ## evaluate response on hallucination/groundedness, instruction adherence, and toxicity
         try:
             curr_result = self.detect_aimon_response(curr_payload)
         except Exception as e:
             logger.error(f"AIMon detect failed: {e}")
-            cumulative_latency_ms = (time.time() - pipeline_start) * 1000
             return self.terminate_with_failure(
                 StopReasons.FEEDBACK_MODEL_FAILED,
                 iteration_num,
                 curr_prompt,
                 telemetry_data,
                 iteration_outputs,
-                cumulative_latency_ms,
+                pipeline_start,
             )
-        # Placeholder for token counts (update if available)
-        prompt_tokens = 0
-        response_tokens = 0
-        #prompt_tokens = self.count_tokens(curr_prompt)
-        #response_tokens = self.count_tokens(curr_generated_text)
-        
-        # Scores and errors for telemetry
+
+        prompt_tokens = self.count_tokens(curr_prompt)
         scores, feedback = self.get_response_feedback(curr_result)
 
         ## update map with current iteration
@@ -154,56 +142,44 @@ class RepromptingPipeline:
         }
         
         stop_reason = None
-        
         while True:
-            
             should_stop, stop_reason = self.end_reprom(curr_result, iteration_num)
             if should_stop:
                 break
             
-            cumulative_latency_ms = (time.time() - pipeline_start) * 1000
-
-            telemetry_entry = self.build_telemetry_entry(
+            telemetry_entry = self._emit_iteration_telemetry(
                 iteration_num,
-                cumulative_latency_ms,
+                pipeline_start,
                 prompt_tokens,
-                response_tokens,
                 scores,
                 feedback,
-                get_residual_error_score(curr_result),
-                get_failed_instructions_count(curr_result),
+                curr_result,
                 StopReasons.CONTINUE,
                 curr_prompt,
                 curr_generated_text,
                 non_fatal_errors,
             )
             telemetry_data.append(telemetry_entry)
-            self.telemetry.emit(**telemetry_entry)
+
             
             logger.info(f"Iteration Num = {iteration_num}")
 
             # Generate corrective prompt
             curr_prompt = self.gen_reprompt(curr_payload, curr_result)
-            logger.info("=== Corrective Prompt ===")
-            logger.info(curr_prompt)
             # retrieve new response from LLM to the corrective prompt
             try:
                 curr_generated_text = self.llm_fn(curr_prompt)
             except Exception as e:
                 logger.error(f"LLM call failed: {e}")
-                cumulative_latency_ms = (time.time() - pipeline_start) * 1000
                 return self.terminate_with_failure(
                     StopReasons.LLM_CALL_FAILED,
                     iteration_num,
                     curr_prompt,
                     telemetry_data,
                     iteration_outputs,
-                    cumulative_latency_ms,
+                    pipeline_start,
                 )
-            logger.info("\n=== Generated Response ===")
-            logger.info(curr_generated_text)
-            # Create new AIMon payload with the updated prompt and response
-            # Note: This assumes the context remains the same throughout iterations
+                
             curr_payload = self.create_payload(context, user_query, user_instructions, curr_generated_text)
 
             ## evaluates the new response on hallucination, instruction adherence, and toxicity
@@ -211,23 +187,16 @@ class RepromptingPipeline:
                 curr_result = self.detect_aimon_response(curr_payload)
             except Exception as e:
                 logger.error(f"AIMon detect failed: {e}")
-                cumulative_latency_ms = (time.time() - pipeline_start) * 1000
                 return self.terminate_with_failure(
                     StopReasons.FEEDBACK_MODEL_FAILED,
                     iteration_num,
                     curr_prompt,
                     telemetry_data,
                     iteration_outputs,
-                    cumulative_latency_ms,
+                    pipeline_start,
                 )   
-            logger.info("=== AIMon Result ===")
-            logger.info(curr_result)
 
-            # Real token counts if available
-            prompt_tokens = 0
-            response_tokens = 0
-            #prompt_tokens = self.count_tokens(curr_prompt)
-            #response_tokens = self.count_tokens(curr_generated_text)
+            prompt_tokens = self.count_tokens(curr_prompt)
 
             # creates score and error vectors for the current result to store in telemetry
             scores, feedback = self.get_response_feedback(curr_result)
@@ -239,23 +208,19 @@ class RepromptingPipeline:
                 "failed_instructions_count": get_failed_instructions_count(curr_result)
             }
             
-        cumulative_latency_ms = (time.time() - pipeline_start) * 1000
-        final_entry = self.build_telemetry_entry(
+        final_entry = self._emit_iteration_telemetry(
             iteration_num,
-            cumulative_latency_ms,
+            pipeline_start,
             prompt_tokens,
-            response_tokens,
             scores,
             feedback,
-            get_residual_error_score(curr_result),
-            get_failed_instructions_count(curr_result),
+            curr_result,
             stop_reason or StopReasons.UNKNOWN_ERROR,
             curr_prompt,
             curr_generated_text,
             non_fatal_errors,
         )
         telemetry_data.append(final_entry)
-        self.telemetry.emit(**final_entry)
 
         valid_iterations = [
             entry for entry in iteration_outputs.values() if isinstance(entry.get("residual_error_score"), (int, float))
@@ -471,6 +436,7 @@ class RepromptingPipeline:
         Returns:
             int: Token count.
         """
+        return 0
         return len(self.tokenizer.encode(text))
     
     def build_telemetry_entry(
@@ -478,7 +444,6 @@ class RepromptingPipeline:
         iteration,
         cumulative_latency,
         prompt_tokens,
-        response_tokens,
         scores,
         feedback,
         residual_error,
@@ -495,7 +460,6 @@ class RepromptingPipeline:
             iteration (int): Iteration number.
             cumulative_latency (float): Total latency in milliseconds so far.
             prompt_tokens (int): Token count for the prompt.
-            response_tokens (int): Token count for the response.
             scores (dict): Evaluation scores.
             feedback (list): Failed instruction feedback.
             residual_error (float): Residual error score.
@@ -512,7 +476,6 @@ class RepromptingPipeline:
             "iteration": iteration,
             "cumulative_latency_ms": cumulative_latency,
             "prompt_tokens": prompt_tokens,
-            "response_tokens": response_tokens,
             "scores": scores,
             "response_feedback": feedback,
             "residual_error": residual_error,
@@ -523,7 +486,7 @@ class RepromptingPipeline:
             "non_fatal_errors": non_fatal_errors or [],
         }
     
-    def terminate_with_failure(self, stop_reason, iteration, prompt, telemetry_data, iteration_outputs, cumulative_latency_ms):
+    def terminate_with_failure(self, stop_reason, iteration, prompt, telemetry_data, iteration_outputs, pipeline_start):
         """
         Handle a fatal error by recording telemetry and returning a failure response.
 
@@ -538,22 +501,20 @@ class RepromptingPipeline:
         Returns:
             dict: Failure response with best available output, telemetry, and caption.
         """
-        entry = self.build_telemetry_entry(
-            iteration,
-            cumulative_latency_ms,
-            0,  # prompt_tokens
-            0,  # response_tokens
-            {},  # scores
-            [],  # response_feedback
-            None,  # residual_error
-            None,  # failed_instructions_count
-            stop_reason,
-            prompt,
-            f"[ERROR: {stop_reason}]",
-            []  # non_fatal_errors
+        # Use the new helper to build & emit telemetry
+        entry = self._emit_iteration_telemetry(
+            iteration=iteration,
+            pipeline_start=pipeline_start,
+            prompt_tokens=0,
+            scores={},
+            feedback=[],
+            curr_result=None,  # No AIMon result here
+            stop_reason=stop_reason,
+            curr_prompt=prompt,
+            curr_generated_text=f"[ERROR: {stop_reason}]",
+            non_fatal_errors=[]
         )
         telemetry_data.append(entry)
-        self.telemetry.emit(**entry)
 
         # Pick best previous response if available
         best_output = "[ERROR: No valid response]"
@@ -568,4 +529,54 @@ class RepromptingPipeline:
             "telemetry": telemetry_data if self.config.return_telemetry else None,
             "caption": f"Re-prompting terminated early due to {stop_reason}." if self.config.return_aimon_caption else None
         }
+
+    
+    def _emit_iteration_telemetry(
+        self,
+        iteration_num,
+        pipeline_start,
+        prompt_tokens,
+        scores,
+        feedback,
+        curr_result,
+        stop_reason,
+        curr_prompt,
+        curr_generated_text,
+        non_fatal_errors
+    ):
+        """
+        Build and emit telemetry for an iteration.
+
+        Args:
+            iteration_num (int): Current iteration number.
+            pipeline_start (float): Start time of the pipeline (epoch).
+            prompt_tokens (int): Number of tokens in the prompt.
+            scores (dict): Evaluation scores.
+            feedback (list): Failed instruction feedback.
+            curr_result (object): AIMon detection result.
+            stop_reason (str): Reason for stopping or continuing.
+            curr_prompt (str): Prompt used.
+            curr_generated_text (str): Model response text.
+            non_fatal_errors (list): Collected non-fatal errors.
+
+        Returns:
+            dict: The telemetry entry.
+        """
+        cumulative_latency_ms = (time.time() - pipeline_start) * 1000
+        entry = self.build_telemetry_entry(
+            iteration_num,
+            cumulative_latency_ms,
+            prompt_tokens,
+            scores,
+            feedback,
+            get_residual_error_score(curr_result),
+            get_failed_instructions_count(curr_result),
+            stop_reason,
+            curr_prompt,
+            curr_generated_text,
+            non_fatal_errors,
+        )
+        self.telemetry.emit(**entry)
+        return entry
+
 
