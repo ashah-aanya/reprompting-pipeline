@@ -7,6 +7,7 @@ import time
 import logging
 import os
 from transformers import AutoTokenizer
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -145,7 +146,7 @@ class RepromptingPipeline:
                 scores,
                 feedback,
                 curr_result,
-                StopReasons.CONTINUE,
+                stop_reason or StopReasons.CONTINUE,
                 curr_prompt,
                 curr_generated_text,
                 non_fatal_errors,
@@ -214,7 +215,7 @@ class RepromptingPipeline:
             str: A formatted prompt including context, query, and instructions.
         """
         
-        ## improve this to not be hardcoded
+        # Append groundedness safeguards to user instructions
         groundedness_instructions = [
             "Ensure that the response does not contain minor or major factual inaccuracies or completely made-up sentences when compared to the context.",
             "Ensure that the response correctly infers implicit information without introducing unsupported facts.",
@@ -225,6 +226,7 @@ class RepromptingPipeline:
 
         all_instructions = user_instructions + groundedness_instructions
 
+        # Format multi-section prompt
         return (
             "### CONTEXT ###\n"
             f"{context.strip()}\n\n"
@@ -268,6 +270,7 @@ class RepromptingPipeline:
             object: AIMon detection result object.
         """
 
+        # Construct AIMon context and query
         aimon_context = f"{payload['context']}\n\nUser Query:\n{payload['user_query']}"
         aimon_query = f"{payload['user_query']}\n\nInstructions:\n{payload['instructions']}"
 
@@ -285,7 +288,7 @@ class RepromptingPipeline:
                 aimon_context
             )
 
-            # Only check failed instructions
+            # Check if explanations for failed instructions are empty
             failed_explanations = []
             try:
                 for inst in result.detect_response.instruction_adherence.get("instructions_list", []):
@@ -297,14 +300,13 @@ class RepromptingPipeline:
             except Exception as e:
                 print(f"⚠️ Error checking failed explanations: {e}")
 
-            # If all failed explanations are non-empty, we're done
             if all(failed_explanations) and all(e != "" for e in failed_explanations):
                 return result
 
             if attempt < max_iterations - 1:
                 print(f"⚠️ Empty explanation(s) for failed instructions detected. Retrying... (Attempt {attempt+1}/{max_iterations})")
-
-        return result  # Return result from last attempt
+                
+        return result
 
     def get_response_feedback(self, result):
             """
@@ -352,15 +354,15 @@ class RepromptingPipeline:
         if iteration_num >= self.config.max_iterations:
             logger.info(f"Reached maximum number of iterations: {iteration_num}")
             return True, StopReasons.MAX_ITERATIONS_REACHED
+        
+        # Continue if toxicity is detected
+        if toxicity_check(result):
+            logger.info("toxicity detected. Continuing reprompting.")
+            return False, StopReasons.CONTINUE_TOXICITY
 
         # Continue if there are still failed instructions
         if get_failed_instructions_count(result) > 0:
             logger.info("Detected adherence/groundedness violations. Continuing reprompting.")
-            return False, StopReasons.CONTINUE
-
-        # Continue if toxicity is detected
-        if toxicity_check(result):
-            logger.info("toxicity detected. Continuing reprompting.")
             return False, StopReasons.CONTINUE
 
         # All instructions followed

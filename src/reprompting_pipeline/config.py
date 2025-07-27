@@ -13,6 +13,7 @@ class StopReasons:
     ALL_INSTRUCTIONS_ADHERED = "all_instructions_adhered"
     MAX_ITERATIONS_REACHED = "max_iterations_reached"
     CONTINUE = "instructions_failed_continue_reprompting" 
+    CONTINUE_TOXICITY = "toxicity_detect_continue_reprompting"
     
     ## limits
     LATENCY_LIMIT_EXCEEDED = "latency_limit_exceeded"
