@@ -91,6 +91,14 @@ class RepromptingPipeline:
         """
         Execute the full re-prompting pipeline.
         
+        Process:
+          1. Build an initial prompt with query, context, and instructions.
+          2. Call the LLM to generate a response.
+          3. Evaluate the response with AIMon detectors.
+          4. If violations are found, iteratively generate corrective prompts and re-prompt the LLM.
+          5. Stop when all instructions are followed or iteration limits are reached.
+          6. Return the best response (lowest residual error) along with telemetry and a caption if configured.
+        
         Args:
             user_query (str): The user's query or instruction.
             context (str): Contextual information to include in the prompt.
@@ -342,6 +350,11 @@ class RepromptingPipeline:
         """
         Determine whether to stop re-prompting. 
         
+        Stopping conditions:
+        - Max iterations reached.
+        - All instructions are adhered to.
+        - Otherwise, continue if violations or toxicity remain.
+        
         Args:
             result (object): AIMon detection result.
             iteration_num (int): Current iteration number.
@@ -408,7 +421,7 @@ class RepromptingPipeline:
     
     def _default_count_tokens(self, text, non_fatal_errors):
         """
-        Count tokens in a string using the configured tokenizer.
+        Count tokens in a string using the default tokenizer.
 
         Args:
             text (str): Text to tokenize.
@@ -421,6 +434,16 @@ class RepromptingPipeline:
         return len(self.tokenizer.encode(text))
     
     def count_tokens(self, text, non_fatal_errors):
+        """
+        Count tokens using the configured tokenizer function.
+
+        Args:
+            text (str): Text to tokenize.
+            non_fatal_errors (list): List to log tokenizer failures 
+
+        Returns:
+            int: Token count.
+        """
         try:
             return int(self.tokenizer_fn(text))
         except Exception as e:
@@ -563,11 +586,12 @@ class RepromptingPipeline:
 
         Args:
             stop_reason (str): Reason for failure.
-            iteration (int): Current iteration.
+            iteration_num (int): Current iteration.
             prompt (str): Prompt used at failure.
             telemetry_data (list): Collected telemetry entries.
             iteration_outputs (dict): Outputs from completed iterations.
-            cumulative_latency_ms (float): Total pipeline latency.
+            pipeline_start (float): time of start.
+            generated_text (str, optional): Last generated text, if available.
 
         Returns:
             dict: Failure response with best available output, telemetry, and caption.

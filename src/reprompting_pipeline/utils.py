@@ -1,8 +1,39 @@
+"""
+utils.py — Utility functions for processing AIMon reprompting detector results.
+
+This module provides helper functions for:
+- Normalizing context inputs (string or list of documents).
+- Extracting failed instructions across instruction adherence, groundedness, and toxicity detectors.
+- Calculating a residual error score (0–1) for evaluating LLM responses.
+
+These utilities are primarily used by the RepromptingPipeline to:
+- Build telemetry.
+- Select best iterations.
+- Guide corrective re-prompting logic.
+
+Key conventions:
+- Toxicity failures are flagged when follow_probability > TOXICITY_THRESHOLD (default 0.25).
+- Residual error scoring penalizes low follow probabilities more heavily and adds a flat penalty for any toxicity failures.
+"""
 from typing import List, Union, Any  
 
+# toxicity threshold for AIMon detection; Follow probabilities above this are considered failures
 TOXICITY_THRESHOLD = 0.25
 
 def normalize_context(context: Union[str, List[Any]]) -> str:
+    """
+    Normalize context input into a single string.
+
+    Args:
+        context (Union[str, List[Any]]): Either a plain string or a list of objects 
+            (e.g., LangChain Document objects with `page_content`).
+
+    Returns:
+        str: A concatenated string representation of the context.
+    
+    Raises:
+        ValueError: If the context type is unsupported.
+    """
     if isinstance(context, str):
         return context  
     if isinstance(context, list):
@@ -11,7 +42,10 @@ def normalize_context(context: Union[str, List[Any]]) -> str:
 
 def _count_toxicity_failures(result) -> int:
     """
-    Counts how many toxicity instructions exceed the threshold.
+    Count the number of toxicity instructions whose follow probability exceeds the threshold.
+
+    Args:
+        result: AIMon detection result containing a `toxicity` section.
 
     Returns:
         int: Number of failed toxicity instructions.
@@ -22,18 +56,34 @@ def _count_toxicity_failures(result) -> int:
         if inst.get("follow_probability", 0.0) > TOXICITY_THRESHOLD
     )
 
-
 def toxicity_check(result) -> bool:
     """
-    Verifies if there are any toxicity failures.
+    Check whether any toxicity instructions exceed the threshold.
+
+    Args:
+        result: AIMon detection result containing a `toxicity` section.
 
     Returns:
-        bool: True if at least one toxicity instruction exceeds the threshold, else False.
+        bool: True if at least one toxicity instruction exceeds the threshold, False otherwise.
     """
     return _count_toxicity_failures(result) > 0
 
 
-def get_failed_toxicity_instructions(result):
+def get_failed_toxicity_instructions(result) -> List[dict]:
+    """
+    Extract failed toxicity instructions exceeding the threshold.
+
+    Args:
+        result: AIMon detection result containing a `toxicity` section.
+
+    Returns:
+        List[dict]: A list of dictionaries, each describing a failed toxicity instruction with:
+            - type (str): "toxicity_failure"
+            - source (str): "toxicity"
+            - instruction (str): The instruction text.
+            - score (float): The follow probability.
+            - explanation (str): The explanation for the failure.
+    """
     failed = []
     for inst in result.detect_response.toxicity.get("instructions_list", []):
         if inst.get("follow_probability", 0.0) > TOXICITY_THRESHOLD:
@@ -46,14 +96,23 @@ def get_failed_toxicity_instructions(result):
             })
     return failed
     
-def get_failed_instructions(result):
+def get_failed_instructions(result) -> List[dict]:
     """
-    Extracts failed instructions:
-    - Adherence & groundedness: label=False
-    - Toxicity: score > threshold
+    Extract all failed instructions from adherence, groundedness, and toxicity detectors.
+
+    Args:
+        result: AIMon detection result containing `instruction_adherence`, `groundedness`, and `toxicity` sections.
+
+    Returns:
+        List[dict]: A list of failed instructions with:
+            - type (str): Failure type ("instruction_adherence_failure", "groundedness_failure", "toxicity_failure").
+            - source (str): Detector source ("instruction_adherence", "groundedness", "toxicity").
+            - instruction (str): The instruction text.
+            - score (float): Follow probability.
+            - explanation (str): Explanation for the failure.
     """
     failed = []
-    # Adherence & groundedness: label-based
+    # Adherence & groundedness
     for source in ["instruction_adherence", "groundedness"]:
         for inst in getattr(result.detect_response, source, {}).get("instructions_list", []):
             if not inst.get("label", True):
@@ -64,17 +123,19 @@ def get_failed_instructions(result):
                     "score": inst.get("follow_probability", 0.0),
                     "explanation": inst.get("explanation", "")
                 })
-    # Toxicity: score-based
-    failed.extend(get_failed_toxicity_instructions(result))
     # Sort by score (most confident first)
     failed.sort(key=lambda x: x["score"], reverse=True)
     return failed
 
 def get_failed_instructions_count(result) -> int:
     """
-    Counts failed instructions across instruction_adherence, groundedness, and toxicity.
-    - For adherence & groundedness: uses label=False
-    - For toxicity: uses score > threshold
+    Count all failed instructions across adherence, groundedness, and toxicity.
+
+    Args:
+        result: AIMon detection result containing `instruction_adherence`, `groundedness`, and `toxicity` sections.
+
+    Returns:
+        int: Total number of failed instructions.
     """
     count = 0
     # Instruction adherence
@@ -90,27 +151,50 @@ def get_failed_instructions_count(result) -> int:
 
 def get_residual_error_score(result):
     """
-    Calculates a residual error score based on penalized follow probabilities.
-    Heavily penalizes values < 0.5.
-    A higher score = worse response.
+    Compute a normalized residual error score (0–1) based on:
+    - Groundedness follow probabilities
+    - Instruction adherence follow probabilities
+    - Toxicity failures (adds a strong penalty)
+
+    Logic:
+    1. Compute a base penalty using groundedness & adherence:
+       - Each instruction's penalty = (1 - p), doubled if p < 0.5.
+       - Average across all instructions for a base score.
+    2. Add a flat toxicity penalty (+0.3) if any toxicity failures exist.
+    3. Clamp the final score to [0,1].
+
+    Args:
+        result: AIMon detection result with `instruction_adherence`, `groundedness`, and `toxicity` sections.
+
+    Returns:
+        float: Residual error score (0 = perfect, 1 = worst).
     """
-    grounded_list = result.detect_response.groundedness.get("instructions_list", [])
-    grounded_probs = [item["follow_probability"] for item in grounded_list] if grounded_list else []
-    avg_grounded_penalty = penalized_average(grounded_probs) if grounded_probs else 0.0
+    combined_probs = [
+        item["follow_probability"]
+        for source in ["groundedness", "instruction_adherence"]
+        for item in getattr(result.detect_response, source, {}).get("instructions_list", [])
+    ]
+    base_penalty = penalized_average(combined_probs) if combined_probs else 0.0
 
-    adherence_list = result.detect_response.instruction_adherence.get("instructions_list", [])
-    adherence_probs = [item["follow_probability"] for item in adherence_list] if adherence_list else []
-    avg_adherence_penalty = penalized_average(adherence_probs) if adherence_probs else 0.0
+    toxicity_penalty = 0.3 if _count_toxicity_failures(result) > 0 else 0.0
 
-    residual_error_score = (avg_grounded_penalty + avg_adherence_penalty) / 2
+    residual_error_score = base_penalty + toxicity_penalty
+    residual_error_score = min(1.0, max(0.0, residual_error_score))
+
     return round(residual_error_score, 2)
 
-def penalized_average(probs):
+
+def penalized_average(probs: List[float]) -> float:
     """
-    Penalize follow probabilities below 0.5 more heavily.
-    For each instruction:
-    - If follow_probability >= 0.5 → use as is        
-    - If follow_probability < 0.5 → double the penalty (1 - prob) * 2
+    Compute a penalized average of follow probabilities.
+
+    Penalizes probabilities <0.5 more heavily by doubling their penalty.
+
+    Args:
+        probs (List[float]): A list of follow probabilities.
+
+    Returns:
+        float: Penalized average.
     """
     penalties = []
     for p in probs:
