@@ -48,10 +48,14 @@ class RepromptingPipeline:
             token=os.getenv("HUGGINGFACE_TOKEN")
         )
         
-        self.tokenizer_fn = tokenizer_fn or self.config.tokenizer_fn or self._default_count_tokens
-        
-        self.config.return_telemetry = getattr(self.config, 'return_telemetry', False)
-        self.config.return_aimon_caption = getattr(self.config, 'return_aimon_caption', False)
+        # Choose tokenizer_fn with validation
+        if tokenizer_fn and callable(tokenizer_fn):
+            self.tokenizer_fn = tokenizer_fn
+        elif getattr(self.config, "tokenizer_fn", None) and callable(self.config.tokenizer_fn):
+            self.tokenizer_fn = self.config.tokenizer_fn
+        else:
+            logger.warning("No valid tokenizer_fn provided; falling back to default.")
+            self.tokenizer_fn = self._default_count_tokens
 
         # AIMon Detect configuration
         self.detect = Detect(
@@ -116,8 +120,6 @@ class RepromptingPipeline:
             logger.error(f"AIMon detect failed: {e}")
             return self.terminate_with_failure(StopReasons.FEEDBACK_MODEL_FAILED, iteration_num, curr_prompt, telemetry_data, iteration_outputs, pipeline_start)
 
-        prompt_tokens = self.count_tokens(curr_prompt, non_fatal_errors)
-        response_tokens = self.count_tokens(curr_generated_text, non_fatal_errors)
         scores, feedback = self.get_response_feedback(curr_result)
 
         self._record_iteration_output(iteration_outputs, iteration_num, curr_generated_text, curr_result)
@@ -127,14 +129,11 @@ class RepromptingPipeline:
         while True:
             should_stop, stop_reason = self.end_reprom(curr_result, iteration_num)
             if should_stop:
-                stop_reason = stop_reason
                 break
             
             telemetry_entry = self._emit_iteration_telemetry(
                 iteration_num,
                 pipeline_start,
-                prompt_tokens,
-                response_tokens,
                 scores,
                 feedback,
                 curr_result,
@@ -159,9 +158,7 @@ class RepromptingPipeline:
             except Exception as e:
                 logger.error(f"AIMon detect failed: {e}")
                 return self.terminate_with_failure(StopReasons.FEEDBACK_MODEL_FAILED, iteration_num, curr_prompt, telemetry_data, iteration_outputs, pipeline_start)
-
-            prompt_tokens = self.count_tokens(curr_prompt, non_fatal_errors)
-            response_tokens = self.count_tokens(curr_generated_text, non_fatal_errors)
+            
             scores, feedback = self.get_response_feedback(curr_result)
 
             iteration_num += 1
@@ -171,8 +168,6 @@ class RepromptingPipeline:
         final_entry = self._emit_iteration_telemetry(
             iteration_num,
             pipeline_start,
-            prompt_tokens,
-            response_tokens,
             scores,
             feedback,
             curr_result,
@@ -354,12 +349,12 @@ class RepromptingPipeline:
         # Continue if there are still failed instructions
         if get_failed_instructions_count(result) > 0:
             logger.info("Detected adherence/groundedness violations. Continuing reprompting.")
-            return False, None
+            return False, StopReasons.CONTINUE
 
         # Continue if toxicity is detected
         if toxicity_check(result):
             logger.info("toxicity detected. Continuing reprompting.")
-            return False, None
+            return False, StopReasons.CONTINUE
 
         # All instructions followed
         logger.info("All instructions followed; stopping reprompting.")
@@ -415,7 +410,7 @@ class RepromptingPipeline:
     
     def count_tokens(self, text, non_fatal_errors):
         try:
-            return self.tokenizer_fn(text)
+            return int(self.tokenizer_fn(text))
         except Exception as e:
             error_msg = f"tokenizer_failed: {e}"
             if error_msg not in non_fatal_errors:
@@ -522,8 +517,6 @@ class RepromptingPipeline:
         self,
         iteration_num,
         pipeline_start,
-        prompt_tokens,
-        response_tokens,
         scores,
         feedback,
         curr_result,
@@ -533,13 +526,11 @@ class RepromptingPipeline:
         non_fatal_errors
     ):
         """
-        Build and emit telemetry for an iteration.
+        Build and emit telemetry for an iteration. Calculates cumulative latency and token counts.
 
         Args:
             iteration_num (int): Current iteration number.
             pipeline_start (float): Start time of the pipeline (epoch).
-            prompt_tokens (int): Number of tokens in the prompt.
-            response_tokens (int): Number of tokens in the response.
             scores (dict): Evaluation scores.
             feedback (list): Failed instruction feedback.
             curr_result (object): AIMon detection result.
@@ -552,6 +543,9 @@ class RepromptingPipeline:
             dict: The telemetry entry.
         """
         cumulative_latency_ms = (time.time() - pipeline_start) * 1000
+        prompt_tokens = self.count_tokens(curr_prompt, non_fatal_errors)
+        response_tokens = self.count_tokens(curr_generated_text, non_fatal_errors)
+        
         entry = self.build_telemetry_entry(
             iteration_num,
             cumulative_latency_ms,
@@ -566,7 +560,13 @@ class RepromptingPipeline:
             curr_generated_text,
             non_fatal_errors,
         )
-        self.telemetry.emit(**entry)
+        try:
+            self.telemetry.emit(**entry)
+        except Exception as e:
+            error_msg = f"telemetry_emit_failed: {e}"
+            if error_msg not in entry["non_fatal_errors"]:
+                entry["non_fatal_errors"].append(error_msg)
+            logger.warning(error_msg)
         return entry
     
     def _record_iteration_output(self, iteration_outputs, iteration_num, generated_text, result):
