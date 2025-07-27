@@ -135,6 +135,9 @@ class RepromptingPipeline:
         except Exception as e:
             logger.error(f"AIMon detect failed: {e}")
             return self._terminate_with_failure(StopReasons.FEEDBACK_MODEL_FAILED, iteration_num, curr_prompt, telemetry_data, iteration_outputs, pipeline_start, generated_text=curr_generated_text)
+        if curr_result is None:
+                logger.error("AIMon detect returned no result.")
+                return self._terminate_with_failure(StopReasons.FEEDBACK_MODEL_FAILED, iteration_num, curr_prompt, telemetry_data, iteration_outputs, pipeline_start, generated_text=curr_generated_text)
 
         # Get scores and detailed feedback on failured instructions
         scores, feedback = self.get_response_feedback(curr_result)
@@ -180,7 +183,10 @@ class RepromptingPipeline:
                 logger.error(f"AIMon detect failed: {e}")
                 iteration_num += 1
                 return self._terminate_with_failure(StopReasons.FEEDBACK_MODEL_FAILED, iteration_num, curr_prompt, telemetry_data, iteration_outputs, pipeline_start, generated_text=curr_generated_text)
-            
+            if curr_result is None:
+                logger.error("AIMon detect returned no result.")
+                return self._terminate_with_failure(StopReasons.FEEDBACK_MODEL_FAILED, iteration_num, curr_prompt, telemetry_data, iteration_outputs, pipeline_start, generated_text=curr_generated_text)
+
             # Extract updated scores and feedback
             scores, feedback = self.get_response_feedback(curr_result)
             iteration_num += 1
