@@ -29,7 +29,7 @@ class RepromptingPipeline:
         detect (Detect): AIMon detection client for evaluating model responses.
         tokenizer (AutoTokenizer): Tokenizer used for estimating prompt/response token counts.
     """
-    def __init__(self, llm_fn, config):
+    def __init__(self, llm_fn, config, tokenizer_fn=None):
         """
         Initialize pipeline with LLM callable and RepromptingConfig.
         
@@ -42,6 +42,13 @@ class RepromptingPipeline:
         
         self.reprompter = Reprompter()
         self.telemetry = TelemetryLogger()
+        
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            "mistralai/Mistral-7B-v0.1",
+            token=os.getenv("HUGGINGFACE_TOKEN")
+        )
+        
+        self.tokenizer_fn = tokenizer_fn or self.config.tokenizer_fn or self._default_count_tokens
         
         self.config.return_telemetry = getattr(self.config, 'return_telemetry', False)
         self.config.return_aimon_caption = getattr(self.config, 'return_aimon_caption', False)
@@ -68,11 +75,6 @@ class RepromptingPipeline:
             application_name = self.config.application_name,
             model_name = self.config.model_name,
             publish=self.config.publish
-        )
-        
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            "mistralai/Mistral-7B-v0.1",
-            token=os.getenv("HUGGINGFACE_TOKEN")
         )
         
     def run(self, user_query, context, user_instructions):
@@ -115,6 +117,7 @@ class RepromptingPipeline:
             return self.terminate_with_failure(StopReasons.FEEDBACK_MODEL_FAILED, iteration_num, curr_prompt, telemetry_data, iteration_outputs, pipeline_start)
 
         prompt_tokens = self.count_tokens(curr_prompt, non_fatal_errors)
+        response_tokens = self.count_tokens(curr_generated_text, non_fatal_errors)
         scores, feedback = self.get_response_feedback(curr_result)
 
         self._record_iteration_output(iteration_outputs, iteration_num, curr_generated_text, curr_result)
@@ -131,6 +134,7 @@ class RepromptingPipeline:
                 iteration_num,
                 pipeline_start,
                 prompt_tokens,
+                response_tokens,
                 scores,
                 feedback,
                 curr_result,
@@ -157,6 +161,7 @@ class RepromptingPipeline:
                 return self.terminate_with_failure(StopReasons.FEEDBACK_MODEL_FAILED, iteration_num, curr_prompt, telemetry_data, iteration_outputs, pipeline_start)
 
             prompt_tokens = self.count_tokens(curr_prompt, non_fatal_errors)
+            response_tokens = self.count_tokens(curr_generated_text, non_fatal_errors)
             scores, feedback = self.get_response_feedback(curr_result)
 
             iteration_num += 1
@@ -167,6 +172,7 @@ class RepromptingPipeline:
             iteration_num,
             pipeline_start,
             prompt_tokens,
+            response_tokens,
             scores,
             feedback,
             curr_result,
@@ -393,7 +399,7 @@ class RepromptingPipeline:
             )
         return caption
     
-    def count_tokens(self, text, non_fatal_errors):
+    def _default_count_tokens(self, text, non_fatal_errors):
         """
         Count tokens in a string using the configured tokenizer.
 
@@ -403,12 +409,17 @@ class RepromptingPipeline:
         Returns:
             int: Token count.
         """
-        return 0
-        if not self.tokenizer: return 0
+        if not self.tokenizer:
+            return 0
+        return len(self.tokenizer.encode(text))
+    
+    def count_tokens(self, text, non_fatal_errors):
         try:
-            return len(self.tokenizer.encode(text))
+            return self.tokenizer_fn(text)
         except Exception as e:
-            non_fatal_errors.append(f"tokenizer_failed: {e}")
+            error_msg = f"tokenizer_failed: {e}"
+            if error_msg not in non_fatal_errors:
+                non_fatal_errors.append(error_msg)
             return 0
     
     def build_telemetry_entry(
@@ -416,6 +427,7 @@ class RepromptingPipeline:
         iteration,
         cumulative_latency,
         prompt_tokens,
+        response_tokens,
         scores,
         feedback,
         residual_error,
@@ -432,6 +444,7 @@ class RepromptingPipeline:
             iteration (int): Iteration number.
             cumulative_latency (float): Total latency in milliseconds so far.
             prompt_tokens (int): Token count for the prompt.
+            response_tokens (int): Token count for the response.
             scores (dict): Evaluation scores.
             feedback (list): Failed instruction feedback.
             residual_error (float): Residual error score.
@@ -448,6 +461,7 @@ class RepromptingPipeline:
             "iteration": iteration,
             "cumulative_latency_ms": cumulative_latency,
             "prompt_tokens": prompt_tokens,
+            "response_tokens": response_tokens,
             "scores": scores,
             "response_feedback": feedback,
             "residual_error": residual_error,
@@ -478,6 +492,7 @@ class RepromptingPipeline:
             iteration=iteration,
             pipeline_start=pipeline_start,
             prompt_tokens=0,
+            response_tokens=0,
             scores={},
             feedback=[],
             curr_result=None,  # No AIMon result here
@@ -508,6 +523,7 @@ class RepromptingPipeline:
         iteration_num,
         pipeline_start,
         prompt_tokens,
+        response_tokens,
         scores,
         feedback,
         curr_result,
@@ -523,6 +539,7 @@ class RepromptingPipeline:
             iteration_num (int): Current iteration number.
             pipeline_start (float): Start time of the pipeline (epoch).
             prompt_tokens (int): Number of tokens in the prompt.
+            response_tokens (int): Number of tokens in the response.
             scores (dict): Evaluation scores.
             feedback (list): Failed instruction feedback.
             curr_result (object): AIMon detection result.
@@ -539,6 +556,7 @@ class RepromptingPipeline:
             iteration_num,
             cumulative_latency_ms,
             prompt_tokens,
+            response_tokens,
             scores,
             feedback,
             get_residual_error_score(curr_result),

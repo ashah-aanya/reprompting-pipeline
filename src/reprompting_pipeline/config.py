@@ -43,6 +43,7 @@ class RepromptingConfig:
         return_aimon_caption (bool): Whether to include a human-readable caption summarizing re-prompting.
         token_limit (Optional[int]): Maximum token budget for corrective prompts. None = no limit.
         latency_limit_ms (Optional[int]): Maximum cumulative latency (ms) before aborting. None = no limit.
+        tokenizer_fn (Optional[callable]): Optional function for counting tokens (str -> int). If None, defaults to HuggingFace tokenizer.
     """
     publish: bool = False
     max_iterations: int = 3
@@ -54,5 +55,6 @@ class RepromptingConfig:
     return_aimon_caption: bool = False
     token_limit: Optional[int] = None
     latency_limit_ms: Optional[int] = None
+    tokenizer_fn: Optional[callable] = None  # Function to count tokens, defaults to None
     
     
