@@ -15,7 +15,6 @@ class TelemetryLogger:
         iteration: int,
         cumulative_latency_ms: float,
         prompt_tokens: int,
-        response_tokens: int,
         scores: dict,
         response_feedback: dict,
         residual_error: int,
@@ -30,10 +29,7 @@ class TelemetryLogger:
             "session_id": self.session_id,
             "iteration": iteration,
             "cumulative_latency_ms": cumulative_latency_ms,
-            "token_counts": {
-                "prompt_tokens": prompt_tokens,
-                "response_tokens": response_tokens
-            },
+            "prompt_tokens": prompt_tokens,
             "scores": scores,
             "response_feedback": response_feedback,
             "residual_error": residual_error,

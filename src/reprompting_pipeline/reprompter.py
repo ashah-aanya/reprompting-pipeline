@@ -10,6 +10,8 @@ class Reprompter:
 
         Instructions are considered passed if they are not present in the failed list.
         """
+        
+        ## give it toxicity stuff too
         # Get all original instructions
         all_instructions = aimon_payload.get("instructions", [])
 
