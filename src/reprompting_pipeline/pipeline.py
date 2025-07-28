@@ -124,7 +124,7 @@ class RepromptingPipeline:
         # Iteratively re-prompt until conditions are met or limits reached
         stop_reason = None
         while True:
-            should_stop, stop_reason = self._should_stop_reprompting(curr_result, iteration_num)
+            should_stop, stop_reason = self._should_stop_reprompting(curr_result, iteration_num, pipeline_start)
             if should_stop:
                 break
             
@@ -308,7 +308,7 @@ class RepromptingPipeline:
         """
         return self.reprompter.create_corrective_prompt(result, payload)
 
-    def _should_stop_reprompting(self, result, iteration_num):
+    def _should_stop_reprompting(self, result, iteration_num, pipeline_start):
         """
         Determine whether to stop re-prompting. 
         
@@ -329,6 +329,13 @@ class RepromptingPipeline:
         if iteration_num >= self.config.max_iterations:
             logger.info(f"Reached maximum number of iterations: {iteration_num}")
             return True, StopReasons.MAX_ITERATIONS_REACHED
+        
+        latency_limit_ms = self.config.latency_limit_ms
+        if latency_limit_ms is not None:
+            cumulative_latency = self._get_cumulative_latency(pipeline_start)
+            if cumulative_latency > ((0.75) * latency_limit_ms):
+                logger.info(f"Latency limit almost exceeded or exceeded. Cumulative latency: {cumulative_latency}")
+                return True, StopReasons.LATENCY_LIMIT_EXCEEDED
         
         # Continue if toxicity is detected
         if toxicity_check(result):
@@ -447,7 +454,7 @@ class RepromptingPipeline:
         Returns:
             dict: The telemetry entry.
         """
-        cumulative_latency_ms = (time.time() - pipeline_start) * 1000
+        cumulative_latency_ms = self._get_cumulative_latency(pipeline_start)
         
         residual_error = get_residual_error_score(curr_result) if curr_result else None
         failed_count = get_failed_instructions_count(curr_result) if curr_result else None
@@ -469,6 +476,18 @@ class RepromptingPipeline:
             error_msg = f"telemetry_emit_failed: {e}"
             logger.warning(error_msg)
         return entry
+    
+    def _get_cumulative_latency(self, pipeline_start):
+        """
+        Calculate cumulative latency since pipeline start.
+
+        Args:
+            pipeline_start (float): Start time of the pipeline (epoch).
+
+        Returns:
+            float: Cumulative latency in milliseconds.
+        """
+        return (time.time() - pipeline_start) * 1000
     
     def _record_iteration_output(self, iteration_outputs, iteration_num, generated_text, result):
         """
