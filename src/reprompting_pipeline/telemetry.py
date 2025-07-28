@@ -33,8 +33,6 @@ class TelemetryLogger:
         self,
         iteration: int,
         cumulative_latency_ms: float,
-        prompt_tokens: int,
-        response_tokens: int,
         scores: dict,
         response_feedback: dict,
         residual_error: int,
@@ -42,7 +40,6 @@ class TelemetryLogger:
         stop_reason: str,
         response_text: str,
         prompt: str = "",
-        non_fatal_errors: Optional[List[str]] = None,
     ):
         """
         Emit a single telemetry entry.
@@ -50,8 +47,6 @@ class TelemetryLogger:
         Args:
             iteration (int): The iteration number of the pipeline (starts at 1).
             cumulative_latency_ms (float): Total latency from pipeline start (ms).
-            prompt_tokens (int): Number of tokens in the prompt for this iteration.
-            response_tokens (int): Number of tokens in the LLM's response.
             scores (dict): Evaluation scores (e.g., groundedness, instruction adherence).
             response_feedback (dict): Detailed feedback with follow probability and explanations for failed instructions.
             residual_error (int): Residual error score for the iteration. See utils.py for calculation.
@@ -59,7 +54,6 @@ class TelemetryLogger:
             stop_reason (str): Reason for stopping or continuing (e.g., "max_iterations_reached").
             response_text (str): The raw text response from the LLM.
             prompt (str): The prompt text used for this iteration.
-            non_fatal_errors (List[str], optional): Any non-fatal errors encountered during this iteration (e.g., tokenizer failures).
 
         Behavior:
             - Appends the telemetry entry to the configured JSONL file.
@@ -70,8 +64,6 @@ class TelemetryLogger:
             "session_id": self.session_id,
             "iteration": iteration,
             "cumulative_latency_ms": cumulative_latency_ms,
-            "prompt_tokens": prompt_tokens,
-            "response_tokens": response_tokens,
             "scores": scores,
             "response_feedback": response_feedback,
             "residual_error": residual_error,
@@ -79,7 +71,6 @@ class TelemetryLogger:
             "stop_reason": stop_reason,
             "prompt": prompt,
             "response_text": response_text,
-            "non_fatal_errors": non_fatal_errors or []
         }
         with open(self.log_path, "a") as f:
             f.write(json.dumps(telemetry) + "\n")

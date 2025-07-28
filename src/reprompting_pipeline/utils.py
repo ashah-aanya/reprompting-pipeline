@@ -2,7 +2,6 @@
 utils.py — Utility functions for processing AIMon reprompting detector results.
 
 This module provides helper functions for:
-- Normalizing context inputs (string or list of documents).
 - Extracting failed instructions across instruction adherence, groundedness, and toxicity detectors.
 - Calculating a residual error score (0–1) for evaluating LLM responses.
 
@@ -19,26 +18,6 @@ from typing import List, Union, Any
 
 # toxicity threshold for AIMon detection; Follow probabilities above this are considered failures
 TOXICITY_THRESHOLD = 0.25
-
-def normalize_context(context: Union[str, List[Any]]) -> str:
-    """
-    Normalize context input into a single string.
-
-    Args:
-        context (Union[str, List[Any]]): Either a plain string or a list of objects 
-            (e.g., LangChain Document objects with `page_content`).
-
-    Returns:
-        str: A concatenated string representation of the context.
-    
-    Raises:
-        ValueError: If the context type is unsupported.
-    """
-    if isinstance(context, str):
-        return context  
-    if isinstance(context, list):
-        return "\n\n".join([getattr(doc, "page_content", str(doc)) for doc in context])
-    raise ValueError(f"Unsupported context type: {type(context)}")
 
 def _count_toxicity_failures(result) -> int:
     """

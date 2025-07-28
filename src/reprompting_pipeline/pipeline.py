@@ -5,9 +5,6 @@ from aimon.reprompting_api.utils import toxicity_check, get_failed_instructions_
 from aimon import Detect
 import time
 import logging
-import os
-from transformers import AutoTokenizer
-import json
 
 logger = logging.getLogger(__name__)
 
@@ -28,17 +25,14 @@ class RepromptingPipeline:
         reprompter (Reprompter): Utility for generating corrective prompts based on evaluation feedback.
         telemetry (TelemetryLogger): Logger for capturing telemetry data.
         detect (Detect): AIMon detection client for evaluating model responses.
-        tokenizer (AutoTokenizer): Tokenizer used for estimating prompt/response token counts.
-        tokenizer_fn (callable): Function to count tokens in a string. Defaults to HuggingFace tokenizer.
     """
-    def __init__(self, llm_fn, config, tokenizer_fn=None):
+    def __init__(self, llm_fn, config):
         """
         Initialize pipeline with LLM callable and RepromptingConfig.
         
         Args:
             llm_fn (callable): Function to call the LLM. Signature: llm_fn(prompt: str) -> str
             config (RepromptingConfig): Configuration object with API keys and limits.
-            tokenizer_fn (callable, optional): Custom token counting function. Defaults to internal tokenizer.
 
         """
         self.llm_fn = llm_fn
@@ -47,21 +41,6 @@ class RepromptingPipeline:
         # Utilities for reprompting, telemetry, and scoring
         self.reprompter = Reprompter()
         self.telemetry = TelemetryLogger()
-        
-        # Default tokenizer (Mistral model). Used if no custom tokenizer is provided.
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            "mistralai/Mistral-7B-v0.1",
-            token=os.getenv("HUGGINGFACE_TOKEN")
-        )
-        
-        # Select token counting function (fallback to default if none provided)
-        if tokenizer_fn and callable(tokenizer_fn):
-            self.tokenizer_fn = tokenizer_fn
-        elif getattr(self.config, "tokenizer_fn", None) and callable(self.config.tokenizer_fn):
-            self.tokenizer_fn = self.config.tokenizer_fn
-        else:
-            logger.warning("No valid tokenizer_fn provided; falling back to default.")
-            self.tokenizer_fn = self._default_count_tokens
 
         # Initialize AIMon Detect for response evaluation
         self.detect = Detect(
@@ -97,7 +76,7 @@ class RepromptingPipeline:
           3. Evaluate the response with AIMon detectors.
           4. If violations are found, iteratively generate corrective prompts and re-prompt the LLM.
           5. Stop when all instructions are followed or iteration limits are reached.
-          6. Return the best response (lowest residual error) along with telemetry and a caption if configured.
+          6. Return the best response (lowest residual error) along with telemetry and a summary if configured.
         
         Args:
             user_query (str): The user's query or instruction.
@@ -109,12 +88,11 @@ class RepromptingPipeline:
                 {
                     "best_response" (str): Best model response from all iterations.
                     "telemetry" (list, optional): Telemetry for all iterations if enabled.
-                    "caption" (str, optional): Summary of the process if enabled.
+                    "summary" (str, optional): Summary of the process if enabled.
                 }
         """
         iteration_outputs = {} # key: iteration number → dict(response_text, residual_error_score, failed_instructions_count)
         telemetry_data = [] # stores per-iteration telemetry logs
-        non_fatal_errors = [] # collect non-breaking errors (e.g., tokenizer failures)
         pipeline_start = time.time()
         iteration_num = 1
         
@@ -160,7 +138,6 @@ class RepromptingPipeline:
                 stop_reason or StopReasons.CONTINUE,
                 curr_prompt,
                 curr_generated_text,
-                non_fatal_errors,
             )
             telemetry_data.append(telemetry_entry)
 
@@ -202,7 +179,6 @@ class RepromptingPipeline:
             stop_reason or StopReasons.UNKNOWN_ERROR,
             curr_prompt,
             curr_generated_text,
-            non_fatal_errors,
         )
         telemetry_data.append(final_entry)
 
@@ -213,8 +189,8 @@ class RepromptingPipeline:
         response = {"best_response": best_output}
         if self.config.return_telemetry:
             response["telemetry"] = telemetry_data
-        if self.config.return_aimon_caption:
-            response["caption"] = self._gen_summary_caption(iteration_num, best_failed_count)
+        if self.config.return_aimon_summary:
+            response["summary"] = self._gen_summary(iteration_num, best_failed_count)
 
         return response
 
@@ -230,27 +206,7 @@ class RepromptingPipeline:
         Returns:
             str: A formatted prompt including context, query, and instructions.
         """
-        
-        # Append groundedness safeguards to user instructions
-        groundedness_instructions = [
-            "Ensure that the response does not contain minor or major factual inaccuracies or completely made-up sentences when compared to the context.",
-            "Ensure that the response correctly infers implicit information without introducing unsupported facts.",
-            "Ensure that the response does not arbitrarily choose between contradictory pieces of information without clarification.",
-            "Ensure that the response does not misinterpret or fabricate implicit information.",
-            "Ensure that the response does not include hallucinated content due to ambiguity."
-        ]
-
-        all_instructions = user_instructions + groundedness_instructions
-
-        # Format multi-section prompt
-        return (
-            "### CONTEXT ###\n"
-            f"{context.strip()}\n\n"
-            "### USER QUERY ###\n"
-            f"{user_query.strip()}\n\n"
-            "### INSTRUCTIONS ###\n"
-            + "\n".join(f"- {inst}" for inst in all_instructions)
-        )
+        return "hi"
 
     def _build_aimon_payload(self, context, user_query, user_instructions, generated_text):
         """
@@ -292,7 +248,7 @@ class RepromptingPipeline:
         def run_detection(query, instructions, generated_text, context):
             return query, instructions, generated_text, context
 
-        max_iterations = 2
+        max_iterations = self.config.max_iterations
 
         for attempt in range(max_iterations):
             _, _, _, _, result = run_detection(
@@ -408,62 +364,25 @@ class RepromptingPipeline:
         best_iteration = min(valid_iterations, key=lambda x: x["residual_error_score"])
         return best_iteration["response_text"], best_iteration["failed_instructions_count"]
     
-    def _gen_summary_caption(self, iteration_num, best_failed_count):
+    def _gen_summary(self, iteration_num, best_failed_count):
         """
-        Generate a human-readable summary caption for the pipeline run.
+        Generate a human-readable summary for the pipeline run.
+            e.g.: "2 iterations, 0 failed instructions remaining"
 
         Args:
             iteration_num (int): Number of iterations performed.
             best_failed_count (int): Number of failed instructions in the best response.
 
         Returns:
-            str: Summary caption.
+            str: Summary.
         """
-        caption = (
-                f"Re-prompting completed in {iteration_num} iterations "
-                f"with {best_failed_count} failed instructions remaining."
-            )
-        return caption
-    
-    def _default_count_tokens(self, text, non_fatal_errors):
-        """
-        Count tokens in a string using the default tokenizer.
-
-        Args:
-            text (str): Text to tokenize.
-
-        Returns:
-            int: Token count.
-        """
-        if not self.tokenizer:
-            return 0
-        return len(self.tokenizer.encode(text))
-    
-    def count_tokens(self, text, non_fatal_errors):
-        """
-        Count tokens using the configured tokenizer function.
-
-        Args:
-            text (str): Text to tokenize.
-            non_fatal_errors (list): List to log tokenizer failures 
-
-        Returns:
-            int: Token count.
-        """
-        try:
-            return int(self.tokenizer_fn(text))
-        except Exception as e:
-            error_msg = f"tokenizer_failed: {e}"
-            if error_msg not in non_fatal_errors:
-                non_fatal_errors.append(error_msg)
-            return 0
+        summary = f"{iteration_num} iterations, {best_failed_count} failed instructions remaining"
+        return summary
     
     def _build_telemetry_entry(
         self,
         iteration,
         cumulative_latency,
-        prompt_tokens,
-        response_tokens,
         scores,
         feedback,
         residual_error,
@@ -471,7 +390,6 @@ class RepromptingPipeline:
         stop_reason,
         prompt,
         response_text,
-        non_fatal_errors,
     ):
         """
         Build a structured telemetry entry for an iteration.
@@ -479,8 +397,6 @@ class RepromptingPipeline:
         Args:
             iteration (int): Iteration number.
             cumulative_latency (float): Total latency in milliseconds so far.
-            prompt_tokens (int): Token count for the prompt.
-            response_tokens (int): Token count for the response.
             scores (dict): Evaluation scores.
             feedback (list): Failed instruction feedback.
             residual_error (float): Residual error score.
@@ -488,7 +404,6 @@ class RepromptingPipeline:
             stop_reason (str): Reason for stopping.
             prompt (str): Prompt used for this iteration.
             response_text (str): Model's response.
-            non_fatal_errors (list): Non-fatal errors encountered.
 
         Returns:
             dict: Structured telemetry entry.
@@ -496,8 +411,6 @@ class RepromptingPipeline:
         return {
             "iteration": iteration,
             "cumulative_latency_ms": cumulative_latency,
-            "prompt_tokens": prompt_tokens,
-            "response_tokens": response_tokens,
             "scores": scores,
             "response_feedback": feedback,
             "residual_error": residual_error,
@@ -505,7 +418,6 @@ class RepromptingPipeline:
             "stop_reason": stop_reason,
             "prompt": prompt,
             "response_text": response_text,
-            "non_fatal_errors": non_fatal_errors or [],
         }
 
     def _emit_iteration_telemetry(
@@ -518,10 +430,9 @@ class RepromptingPipeline:
         stop_reason,
         curr_prompt,
         curr_generated_text,
-        non_fatal_errors
     ):
         """
-        Build and emit telemetry for an iteration. Calculates cumulative latency and token counts.
+        Build and emit telemetry for an iteration. Calculates cumulative latency.
 
         Args:
             iteration_num (int): Current iteration number.
@@ -532,14 +443,11 @@ class RepromptingPipeline:
             stop_reason (str): Reason for stopping or continuing.
             curr_prompt (str): Prompt used.
             curr_generated_text (str): Model response text.
-            non_fatal_errors (list): Collected non-fatal errors.
 
         Returns:
             dict: The telemetry entry.
         """
         cumulative_latency_ms = (time.time() - pipeline_start) * 1000
-        prompt_tokens = self.count_tokens(curr_prompt, non_fatal_errors)
-        response_tokens = self.count_tokens(curr_generated_text, non_fatal_errors)
         
         residual_error = get_residual_error_score(curr_result) if curr_result else None
         failed_count = get_failed_instructions_count(curr_result) if curr_result else None
@@ -547,8 +455,6 @@ class RepromptingPipeline:
         entry = self._build_telemetry_entry(
             iteration_num,
             cumulative_latency_ms,
-            prompt_tokens,
-            response_tokens,
             scores,
             feedback,
             residual_error,
@@ -556,14 +462,11 @@ class RepromptingPipeline:
             stop_reason,
             curr_prompt,
             curr_generated_text,
-            non_fatal_errors,
         )
         try:
             self.telemetry.emit(**entry)
         except Exception as e:
             error_msg = f"telemetry_emit_failed: {e}"
-            if error_msg not in entry["non_fatal_errors"]:
-                entry["non_fatal_errors"].append(error_msg)
             logger.warning(error_msg)
         return entry
     
@@ -600,7 +503,7 @@ class RepromptingPipeline:
             generated_text (str, optional): Last generated text, if available.
 
         Returns:
-            dict: Failure response with best available output, telemetry, and caption.
+            dict: Failure response with best available output, telemetry, and summary.
         """
         entry = self._emit_iteration_telemetry(
             iteration_num=iteration_num,
@@ -611,7 +514,6 @@ class RepromptingPipeline:
             stop_reason=stop_reason,
             curr_prompt=prompt,
             curr_generated_text=generated_text or f"[ERROR: {stop_reason}]",
-            non_fatal_errors=[]
         )
         telemetry_data.append(entry)
 
@@ -632,8 +534,8 @@ class RepromptingPipeline:
         return {
             "best_response": best_output,
             "telemetry": telemetry_data if self.config.return_telemetry else None,
-            "caption": (
+            "summary": (
                 f"Re-prompting terminated early due to {stop_reason}."
-                if self.config.return_aimon_caption else None
+                if self.config.return_aimon_summary else None
             )
         }
