@@ -1,7 +1,6 @@
 import json
 import uuid
 from datetime import datetime
-from typing import Optional, List
 from pathlib import Path
 
 class TelemetryLogger:

@@ -206,7 +206,19 @@ class RepromptingPipeline:
         Returns:
             str: A formatted prompt including context, query, and instructions.
         """
-        return "hi"
+        if not isinstance(user_instructions, list):
+            logger.warning("user_instructions is not a list. Defaulting to empty list.")
+            user_instructions = []
+        
+        # Format the prompt with clear sections
+        prompt = (
+            f"Context:\n{context}\n\n"
+            f"User Query:\n{user_query}\n\n"
+            f"Instructions:\n" + "\n".join(user_instructions) + "\n\n"
+            "Generate a response that adheres to the instructions and is grounded in the context."
+        )
+        return prompt
+        
 
     def _build_aimon_payload(self, context, user_query, user_instructions, generated_text):
         """
@@ -248,9 +260,9 @@ class RepromptingPipeline:
         def run_detection(query, instructions, generated_text, context):
             return query, instructions, generated_text, context
 
-        max_iterations = self.config.max_iterations
+        max_retries = self.config.feedback_model_max_retries
 
-        for attempt in range(max_iterations):
+        for attempt in range(max_retries):
             _, _, _, _, result = run_detection(
                 aimon_query,
                 payload['instructions'],
@@ -273,8 +285,8 @@ class RepromptingPipeline:
             if all(failed_explanations) and all(e != "" for e in failed_explanations):
                 return result
 
-            if attempt < max_iterations - 1:
-                print(f"⚠️ Empty explanation(s) for failed instructions detected. Retrying... (Attempt {attempt+1}/{max_iterations})")
+            if attempt < max_retries - 1:
+                print(f"⚠️ Empty explanation(s) for failed instructions detected. Retrying... (Attempt {attempt+1}/{max_retries})")
                 
         return result
 
@@ -339,7 +351,7 @@ class RepromptingPipeline:
         
         # Continue if toxicity is detected
         if toxicity_check(result):
-            logger.info("toxicity detected. Continuing reprompting.")
+            logger.info("Toxicity detected. Continuing reprompting.")
             return False, StopReasons.CONTINUE_TOXICITY
 
         # Continue if there are still failed instructions

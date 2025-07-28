@@ -38,6 +38,8 @@ class RepromptingConfig:
         return_telemetry (bool): Whether to include per-iteration telemetry in the response.
         return_aimon_summary(bool): Whether to include a human-readable caption summarizing re-prompting. (e.g.: 2 iterations, 0 failed instructions)
         latency_limit_ms (Optional[int]): Maximum cumulative latency (ms) before aborting. None = no limit.
+        user_model_max_retries (Optional[int]): Max retries for user model calls. Defaults to 2.
+        feedback_model_max_retries (Optional[int]): Max retries for feedback model calls. Defaults to
     """
     publish: bool = False
     max_iterations: int = 2
@@ -47,5 +49,7 @@ class RepromptingConfig:
     return_telemetry: bool = False
     return_aimon_summary: bool = False
     latency_limit_ms: Optional[int] = None
+    user_model_max_retries: Optional[int] = 2
+    feedback_model_max_retries: Optional[int] = 2
     
     
