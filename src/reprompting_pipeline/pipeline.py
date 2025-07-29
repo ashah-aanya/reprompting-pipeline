@@ -214,7 +214,8 @@ class RepromptingPipeline:
 
     def _call_llm(self, prompt, max_attempts, base_delay=1):
         """
-        Calls the LLM with exponential backoff. Raises an exception if all retries fail.
+        Calls the LLM with exponential backoff. Retries if the LLM call fails
+        OR returns a non-string value. Raises an exception if all retries fail.
 
         Args:
             prompt (str): Prompt for the LLM.
@@ -226,11 +227,14 @@ class RepromptingPipeline:
         """
         for attempt in range(max_attempts):
             try:
-                return self.llm_fn(prompt)
+                result = self.llm_fn(prompt)
+                if not isinstance(result, str):
+                    raise TypeError(f"LLM returned non-string type: {type(result).__name__}")
+                return result
             except Exception as e:
                 wait_time = base_delay * (2 ** attempt) + random.uniform(0, 0.1)
                 time.sleep(wait_time)
-        raise RuntimeError("LLM call failed after maximum retries.")
+        raise RuntimeError("LLM call failed or returned invalid type after maximum retries.")
     
     def _detect_aimon_response(self, payload, max_attempts, base_delay=1):
         """
@@ -293,6 +297,7 @@ class RepromptingPipeline:
         
         Stopping conditions:
         - Max iterations reached.
+        - Latency budget 75% depleted
         - All instructions are adhered to.
         - Otherwise, continue if violations or toxicity remain.
         
@@ -357,7 +362,8 @@ class RepromptingPipeline:
         Returns:
             str: Summary.
         """
-        summary = f"{iteration_num} iterations, {best_failed_count} failed instructions remaining"
+        iteration_word = "iteration" if iteration_num == 1 else "iterations"
+        summary = f"{iteration_num} {iteration_word}, {best_failed_count} failed instructions remaining"
         return summary
     
     def _build_telemetry_entry(
