@@ -229,7 +229,7 @@ class RepromptingPipeline:
             try:
                 result = self.llm_fn(prompt)
                 if not isinstance(result, str):
-                    raise TypeError(f"LLM returned non-string type: {type(result).__name__}")
+                    raise TypeError(f"LLM returned non-string type: {type(result).__name__}, value: {result}")
                 return result
             except Exception as e:
                 wait_time = base_delay * (2 ** attempt) + random.uniform(0, 0.1)
@@ -238,7 +238,23 @@ class RepromptingPipeline:
     
     def _detect_aimon_response(self, payload, max_attempts, base_delay=1):
         """
-        Calls AIMon detect with exponential backoff. Raises an error if all retries fail.
+        Calls AIMon Detect with exponential backoff and returns the detection result.
+
+        This method wraps the AIMon evaluation call, retrying if it fails due to transient 
+        errors (e.g., network issues or temporary service unavailability). It retries up to 
+        `max_attempts` times with exponential backoff before raising a RuntimeError.
+
+        Args:
+            payload (dict): A dictionary containing 'context', 'user_query', 
+                            'instructions', and 'generated_text' for evaluation.
+            max_attempts (int): Maximum number of retry attempts.
+            base_delay (float): Initial delay in seconds before exponential backoff.
+
+        Returns:
+            object: The AIMon detection result containing evaluation scores and feedback.
+
+        Raises:
+            RuntimeError: If AIMon Detect fails after all retry attempts.
         """
         aimon_context = f"{payload['context']}\n\nUser Query:\n{payload['user_query']}"
         aimon_query = f"{payload['user_query']}\n\nInstructions:\n{payload['instructions']}"
@@ -453,7 +469,8 @@ class RepromptingPipeline:
         try:
             self.telemetry.emit(**entry)
         except Exception as e:
-            error_msg = f"telemetry_emit_failed: {e}"
+            # Log error silently without breaking the pipeline
+            print(f"[Warning] Telemetry emission failed: {e}")
         return entry
     
     def _get_cumulative_latency(self, pipeline_start):

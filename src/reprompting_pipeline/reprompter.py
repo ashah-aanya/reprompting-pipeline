@@ -1,7 +1,4 @@
-import logging
 from aimon.reprompting_api.utils import get_failed_instructions_count, get_failed_instructions, get_failed_toxicity_instructions
-
-logger = logging.getLogger(__name__)
 
 class Reprompter:     
     """
@@ -51,12 +48,15 @@ class Reprompter:
 
         Returns:
             str: Corrective prompt for the LLM.
+            
+        Raises:
+            RuntimeError: If corrective prompt generation fails.
         """
         try:
             failed_instructions = get_failed_instructions(result)
             failed_count = get_failed_instructions_count(result)
 
-            tone = self.determine_tone(result, failed_count)
+            tone = self.determine_tone(failed_count)
 
             toxicity_feedback = self.get_toxicity_reprompt(result)
             failed_instructions_reprompt = self.format_failed_instructions(failed_instructions, toxicity_feedback)
@@ -77,11 +77,9 @@ class Reprompter:
             )
             return prompt
         except Exception as e:
-            logger.error("Error in create_corrective_prompt: %s", e, exc_info=True)
-            return (
-                "An error occurred while generating the corrective prompt. "
-                "Please retry or inspect the pipeline output."
-            )
+            raise RuntimeError(
+                f"Corrective prompt generation failed: Unexpected error of type {type(e).__name__} — {e}"
+            ) from e
 
     def get_toxicity_reprompt(self, result) -> str:
         """
@@ -112,8 +110,7 @@ class Reprompter:
                 )
             return "\n\n".join(lines)
         except Exception as e:
-            logger.warning("Error in _get_toxicity_reprompt: %s", e, exc_info=True)
-            return "An error occurred while generating feedback for toxicity issues."
+            return ""
         
     def get_reprompt_per_instruction(self, failed_instruction):
         """
@@ -140,8 +137,9 @@ class Reprompter:
                 f"→ Explanation: {failed_instruction.get('explanation', '[No explanation provided]')}\n"
             )
         except Exception as e:
-            logger.warning("Error in _get_reprompt_per_instruction: %s", e, exc_info=True)
-            return "An error occurred while generating feedback for this instruction."
+            raise RuntimeError(
+                f"Corrective prompt generation failed: Unexpected error of type {type(e).__name__} — {e}"
+            ) from e
         
     def format_failed_instructions(self, failed_instructions, toxicity_feedback: str = None):
         """
@@ -181,7 +179,6 @@ class Reprompter:
             failed_instructions = {item["instruction"] for item in get_failed_instructions(result)}
             return [instr for instr in all_instructions if instr not in failed_instructions]
         except Exception as e:
-            logger.warning("Error in _get_passed_instructions: %s", e, exc_info=True)
             return []
         
     def format_passed_instructions(self, passed_instructions) -> str:
@@ -201,7 +198,7 @@ class Reprompter:
             "\n".join(f"- {instr}" for instr in passed_instructions)
         )
 
-    def determine_tone(self, result, failed_count: int) -> str:
+    def determine_tone(self, failed_count: int) -> str:
         """
         Decide the corrective prompt tone based on failure severity:
         
@@ -213,7 +210,6 @@ class Reprompter:
                     Almost there! Just a few small fixes needed.
 
         Args:
-            result: AIMon detection result.
             failed_count (int): Total number of failed instructions.
 
         Returns:

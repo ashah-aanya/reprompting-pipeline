@@ -28,8 +28,17 @@ def get_config():
         application_name="api_test",
         max_iterations=2,
     )
+def get_config_without_telemetry():
+    return RepromptingConfig(
+        aimon_api_key=AIMON_API_KEY,
+        publish=False,
+        return_telemetry=False,
+        return_aimon_summary=False,
+        application_name="api_test",
+        max_iterations=2,
+    )
 
-def get_config_with_latency_limit():
+def get_config_with_low_latency_limit():
     return RepromptingConfig(
         aimon_api_key=AIMON_API_KEY,
         publish=False,
@@ -38,6 +47,17 @@ def get_config_with_latency_limit():
         application_name="api_test",
         max_iterations=2,
         latency_limit_ms=100
+    )
+    
+def get_config_with_latency_limit():
+    return RepromptingConfig(
+        aimon_api_key=AIMON_API_KEY,
+        publish=False,
+        return_telemetry=True,
+        return_aimon_summary=True,
+        application_name="api_test",
+        max_iterations=3,
+        latency_limit_ms=5000
     )
     
 def get_config_with_iteration_limit():
@@ -52,14 +72,24 @@ def get_config_with_iteration_limit():
 
 # --- Test Runs ---
 
-def test_latency_limit():
-    config = get_config_with_latency_limit()
+def test_low_latency_limit():
+    config = get_config_with_low_latency_limit()
     return run_reprompting_pipeline(
-        user_query="Test invalid return",
+        user_query="Test latency limit termination return",
         context="Context",
         llm_fn=my_llm,
         reprompting_config=config,
         user_instructions=[]
+    )
+    
+def test_latency_limit():
+    config = get_config_with_latency_limit()
+    return run_reprompting_pipeline(
+        user_query="What is context?",
+        context="Context",
+        llm_fn=my_llm,
+        reprompting_config=config,
+        user_instructions=["Do not use the letter e", "Only use the letter e"]
     )
 
 def test_iteration_limit():
@@ -81,18 +111,42 @@ def test_empty_context_and_instructions():
         reprompting_config=config,
         user_instructions=[]  # No instructions
     )
-    
+
+def test_no_telemetry():
+    """Test with telemetry and summary disabled."""
+    config = get_config_without_telemetry()
+    result = run_reprompting_pipeline(
+        user_query="What's the policy?",
+        context="Context for telemetry disabled run",
+        llm_fn=my_llm,
+        reprompting_config=config,
+        user_instructions=[]
+    )
+    # Ensure telemetry and summary are not present
+    assert "telemetry" not in result
+    assert "summary" not in result
+    return result
+
 if __name__ == "__main__":
     print("\n=== Running Selected Tests ===\n")
+    
 
+    """low_latency_result = test_low_latency_limit()
+    print("\n--- test_low_latency_limit ---")
+    print(low_latency_result)
+    
     latency_result = test_latency_limit()
     print("\n--- test_latency_limit ---")
     print(latency_result)
 
-    iteration_result = test_iteration_limit()  # assuming test_iteration_limit was meant to call this
-    print("\n--- test_max_iterations ---")
+    iteration_result = test_iteration_limit()
+    print("\n--- test_iteration_limit ---")
     print(iteration_result)
     
-    empty_context_and_instructions_result = test_empty_context_and_instructions()  # assuming test_iteration_limit was meant to call this
+    empty_context_and_instructions_result = test_empty_context_and_instructions()
     print("\n--- test_empty_context_and_instructions ---")
-    print(empty_context_and_instructions_result)
+    print(empty_context_and_instructions_result)"""
+    
+    no_telemetry_result = test_no_telemetry()
+    print("\n--- test_no_telemetry ---")
+    print(no_telemetry_result)

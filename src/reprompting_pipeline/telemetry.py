@@ -19,7 +19,7 @@ class TelemetryLogger:
         cumulative_latency_ms: float,
         scores: dict,
         response_feedback: dict,
-        residual_error: int,
+        residual_error: float,
         failed_instructions_count: int,
         stop_reason: str,
         response_text: str,

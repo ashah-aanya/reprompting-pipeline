@@ -6,9 +6,7 @@ Typical usage:
     from aimon.reprompting_api.runner import run_reprompting_pipeline
     from aimon.reprompting_api.config import RepromptingConfig
     
-    def my_llm(user_query: str, context: str, system_prompt: str) -> str:
-        # concatinate user query, context, and system prompt to form the full prompt
-        prompt = build_prompt(user_query, context, system_prompt)
+    def my_llm(prompt: str) -> str:
         # Call your LLM here (OpenAI, Anthropic, etc.)
         return llm_api.generate(prompt)
     
@@ -32,7 +30,7 @@ from aimon.reprompting_api.config import RepromptingConfig
 def run_reprompting_pipeline(
     llm_fn,
     user_query: str,
-    context:str,
+    context:str = None,
     user_instructions: List[str] = None,
     reprompting_config: RepromptingConfig = None,
 ) -> dict:
@@ -44,7 +42,7 @@ def run_reprompting_pipeline(
 
     Args:
         user_query (str): The query to answer.
-        context (Union[str, List]): Context (string, list, or retriever).
+        context (str): Context in str form.
         llm_fn (Callable[[str],str]): A function to call the LLM.
         user_instructions (List[str], optional): Instructions to validate adherence to.
         reprompting_config (RepromptingConfig, optional): Pipeline configuration.
@@ -58,6 +56,14 @@ def run_reprompting_pipeline(
 
     # Use the provided config or fall back to defaults
     config = reprompting_config or RepromptingConfig()
+    
+    # validate llm_fn
+    if not callable(llm_fn):
+        raise TypeError("llm_fn must be a callable that accepts a single string prompt and returns a string.")
+
+    if not user_query or not isinstance(user_query, str):
+        raise ValueError("user_query must be a non-empty string.")
+
     # initialize the re-prompting pipeline with the LLM function and configuration
     pipeline = RepromptingPipeline(llm_fn=llm_fn, config=config)
     

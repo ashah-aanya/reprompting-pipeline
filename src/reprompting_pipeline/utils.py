@@ -14,7 +14,7 @@ Key conventions:
 - Toxicity failures are flagged when follow_probability > TOXICITY_THRESHOLD (default 0.25).
 - Residual error scoring penalizes low follow probabilities more heavily and adds a flat penalty for any toxicity failures.
 """
-from typing import List, Union, Any  
+from typing import List
 
 # toxicity threshold for AIMon detection; Follow probabilities above this are considered failures
 TOXICITY_THRESHOLD = 0.25
@@ -146,7 +146,7 @@ def get_residual_error_score(result):
         result: AIMon detection result with `instruction_adherence`, `groundedness`, and `toxicity` sections.
 
     Returns:
-        float: Residual error score (0 = perfect, 1 = worst).
+        float: Residual error score (0 = perfect, 1 = worst). The float is rounded to two decimal places.
     """
     combined_probs = [
         item["follow_probability"]
