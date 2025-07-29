@@ -1,24 +1,6 @@
 """
 runner.py — This module provides a high-level function (`run_reprompting_pipeline`) 
 for running AIMon's iterative re-prompting workflow.
-
-Typical usage:
-    from aimon.reprompting_api.runner import run_reprompting_pipeline
-    from aimon.reprompting_api.config import RepromptingConfig
-    
-    def my_llm(prompt: str) -> str:
-        # Call your LLM here (OpenAI, Anthropic, etc.)
-        return llm_api.generate(prompt)
-    
-    response = run_reprompting_pipeline(
-        user_query="Summarize this document in 3 bullet points.",
-        context="Some context text...",
-        llm_fn=my_llm,
-        user_instructions=["Be concise.", "Use bullet points."],
-        reprompting_config=RepromptingConfig(max_iterations=3)
-    )
-    print(response["best_response"])
-
 This function is the primary interface for developers and end-users; contributors 
 can extend this behavior by modifying `RepromptingPipeline` or `RepromptingConfig`.
 """
@@ -31,6 +13,7 @@ def run_reprompting_pipeline(
     llm_fn,
     user_query: str,
     context:str = None,
+    system_prompt: str = None,
     user_instructions: List[str] = None,
     reprompting_config: RepromptingConfig = None,
 ) -> dict:
@@ -43,7 +26,8 @@ def run_reprompting_pipeline(
     Args:
         user_query (str): The query to answer.
         context (str): Context in str form.
-        llm_fn (Callable[[str],str]): A function to call the LLM.
+        llm_fn (Callable[[str, Optional[str], Optional[str]],str]): A function to call the LLM that takes in a prompt and optionally
+        accepts a user_query and context
         user_instructions (List[str], optional): Instructions to validate adherence to.
         reprompting_config (RepromptingConfig, optional): Pipeline configuration.
 
@@ -59,7 +43,7 @@ def run_reprompting_pipeline(
     
     # validate llm_fn
     if not callable(llm_fn):
-        raise TypeError("llm_fn must be a callable that accepts a single string prompt and returns a string.")
+        raise TypeError("llm_fn must be a callable that returns a string.")
 
     if not user_query or not isinstance(user_query, str):
         raise ValueError("user_query must be a non-empty string.")
@@ -70,5 +54,6 @@ def run_reprompting_pipeline(
     return pipeline.run(
         user_query=user_query,
         context=context,
-        user_instructions=user_instructions or [] # Default to empty list if none provided
+        user_instructions=user_instructions or [], # Default to empty list if none provided
+        system_prompt=system_prompt
     )

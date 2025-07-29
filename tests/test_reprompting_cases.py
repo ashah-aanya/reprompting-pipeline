@@ -8,8 +8,15 @@ AIMON_API_KEY = os.environ.get("AIMON_API_KEY")
 
 client = Together(api_key=TOGETHER_API_KEY)
 
-def my_llm(prompt: str) -> str:
+def my_llm(system_prompt: str, context = None, user_query = None) -> str:
     """Normal working LLM."""
+    prompt = system_prompt
+    if context:
+        prompt += f"\nContext: {context}"
+    if user_query:
+        prompt += f"\n Query: {user_query}"
+    print("printing prompt")
+    print(prompt)
     response = client.chat.completions.create(
         model="mistralai/Mistral-7B-Instruct-v0.2",
         messages=[{"role": "user", "content": prompt}],
@@ -127,9 +134,35 @@ def test_no_telemetry():
     assert "summary" not in result
     return result
 
+def test_no_system_prompt():
+    """Test with telemetry and summary disabled."""
+    config = get_config()
+    return run_reprompting_pipeline(
+        user_query="What's the policy?",
+        context="Context for telemetry disabled run",
+        llm_fn=my_llm,
+        reprompting_config=config,
+        # contradictory instructions to test reprompting prompt
+        user_instructions=["use the letter e only", "do not use the letter e"]
+    )
+
+def test_with_system_prompt():
+    """Test with telemetry and summary disabled."""
+    config = get_config()
+    return run_reprompting_pipeline(
+        user_query="What's the policy?",
+        context="Context for telemetry disabled run",
+        llm_fn=my_llm,
+        reprompting_config=config,
+        # contradictory instructions to test reprompting prompt
+        user_instructions=["use the letter e only", "do not use the letter e"],
+        system_prompt= "this is a system prompt"
+    )
+
 if __name__ == "__main__":
     print("\n=== Running Selected Tests ===\n")
-    
+    print(my_llm("This is a test system prompt.", context="Sample context", user_query="What is the policy?"))
+
 
     """low_latency_result = test_low_latency_limit()
     print("\n--- test_low_latency_limit ---")
@@ -150,3 +183,12 @@ if __name__ == "__main__":
     no_telemetry_result = test_no_telemetry()
     print("\n--- test_no_telemetry ---")
     print(no_telemetry_result)
+    
+    no_system_prompt_result = test_no_system_prompt()
+    print("\n--- test_no_system_prompt ---")
+    print(no_system_prompt_result)
+    
+    system_prompt_result = test_with_system_prompt()
+    print("\n--- test_with_system_prompt ---")
+    print(system_prompt_result)
+    

@@ -18,7 +18,7 @@ class RepromptingPipeline:
       - Collection and emission of telemetry for all iterations.
       
     Attributes:
-        llm_fn (callable): Function to call the LLM. Must accept a string prompt and return a string response.
+        llm_fn (callable): Function to call the LLM. Must accept a string prompt and optionally accept a string query and string context and return a string response.
         config (RepromptingConfig): Configuration object with API keys and iteration limits.
         reprompter (Reprompter): Utility for generating corrective prompts based on evaluation feedback.
         telemetry (TelemetryLogger): Logger for capturing telemetry data.
@@ -29,7 +29,7 @@ class RepromptingPipeline:
         Initialize pipeline with LLM callable and RepromptingConfig.
         
         Args:
-            llm_fn (callable): Function to call the LLM. Signature: llm_fn(prompt: str) -> str
+            llm_fn (callable): Function to call the LLM. Signature: llm_fn(prompt: str, context: str, user_query: str) -> str
             config (RepromptingConfig): Configuration object with API keys and limits.
 
         """
@@ -64,7 +64,7 @@ class RepromptingPipeline:
             publish=self.config.publish
         )
         
-    def run(self, user_query, context, user_instructions):
+    def run(self, user_query, context, user_instructions, system_prompt=None):
         """
         Execute the full re-prompting pipeline.
         
@@ -93,11 +93,13 @@ class RepromptingPipeline:
         pipeline_start = time.time()
         iteration_num = 1
         
-        # Build the initial prompt
-        curr_prompt = self._build_initial_prompt(context, user_query, user_instructions)
+        if system_prompt is None:
+            system_prompt = ""
 
+        curr_prompt = system_prompt
+        
         # First LLM call
-        curr_generated_text = self._call_llm(curr_prompt,self.config.user_model_max_retries)
+        curr_generated_text = self._call_llm(curr_prompt,self.config.user_model_max_retries, context, user_query)
         
         # Evaluate response with AIMon
         curr_payload = self._build_aimon_payload(context, user_query, user_instructions, curr_generated_text)
@@ -162,32 +164,7 @@ class RepromptingPipeline:
         if self.config.return_aimon_summary:
             response["summary"] = self._gen_summary(iteration_num, best_failed_count)
 
-        return response
-
-    def _build_initial_prompt(self, context, user_query, user_instructions):
-        """
-        Builds initial LLM prompt by clearly delineating context, query, and combined instructions.
-        
-        Args:
-            context (str): Context for the query.
-            user_query (str): The user's query.
-            user_instructions (list[str]): Instructions for the model.
-            
-        Returns:
-            str: A formatted prompt including context, query, and instructions.
-        """
-        if not isinstance(user_instructions, list):
-            user_instructions = []
-        
-        # Format the prompt with clear sections
-        prompt = (
-            f"Context:\n{context}\n\n"
-            f"User Query:\n{user_query}\n\n"
-            f"Instructions:\n" + "\n".join(user_instructions) + "\n\n"
-            "Generate a response that adheres to the instructions and is grounded in the context."
-        )
-        return prompt
-        
+        return response     
 
     def _build_aimon_payload(self, context, user_query, user_instructions, generated_text):
         """
@@ -212,7 +189,7 @@ class RepromptingPipeline:
         }
         return payload
 
-    def _call_llm(self, prompt, max_attempts, base_delay=1):
+    def _call_llm(self, prompt, max_attempts, base_delay=1, context = None, user_query = None,):
         """
         Calls the LLM with exponential backoff. Retries if the LLM call fails
         OR returns a non-string value. Raises an exception if all retries fail.
@@ -227,7 +204,10 @@ class RepromptingPipeline:
         """
         for attempt in range(max_attempts):
             try:
-                result = self.llm_fn(prompt)
+                if context is None and user_query is None:
+                    result = self.llm_fn(prompt)
+                else:
+                    result = self.llm_fn(prompt, context, user_query)
                 if not isinstance(result, str):
                     raise TypeError(f"LLM returned non-string type: {type(result).__name__}, value: {result}")
                 return result

@@ -43,6 +43,8 @@ class RepromptingConfig:
     """
     publish: bool = False
     max_iterations: int = 2
+    if max_iterations < 1:
+        raise ValueError("Max iterations must be greater than 0")
     aimon_api_key: Optional[str] = os.getenv("AIMON_API_KEY") or "default_api_key"
     if aimon_api_key == "default_api_key":
         raise ValueError("AIMON_API_KEY environment variable is not set and no fallback value is provided.")
