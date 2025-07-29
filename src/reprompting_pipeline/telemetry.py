@@ -1,32 +1,17 @@
 import json
 import uuid
 from datetime import datetime
-from pathlib import Path
 
 class TelemetryLogger:
     """
     A lightweight logger for recording telemetry events during re-prompting pipeline execution.
 
-    Each telemetry record captures:
-      - Timing and token usage for the iteration.
-      - Evaluation scores and failed instruction feedback.
-      - The LLM's response, prompt, and any non-fatal errors.
-      - The stop reason (e.g., max iterations reached, all instructions adhered).
-      - A unique session identifier for grouping logs across runs.
-
-    Telemetry is written as JSON Lines (JSONL), with one record per line, to support easy parsing.
+    Telemetry is stored in memory for retrieval and returned by the pipeline when requested.
     """
-    def __init__(self, log_path="telemetry_log.jsonl"):
-        """
-        Initialize a TelemetryLogger.
-
-        Args:
-            log_path (str): Path to the JSONL file where telemetry entries are appended.
-                            Directories will be created if they do not exist.
-        """
+    def __init__(self):
+        """Initialize an in-memory telemetry logger."""
         self.session_id = str(uuid.uuid4())
-        self.log_path = Path(log_path)
-        self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        self.memory_store = []
 
     def emit(
         self,
@@ -47,20 +32,18 @@ class TelemetryLogger:
             iteration (int): The iteration number of the pipeline (starts at 1).
             cumulative_latency_ms (float): Total latency from pipeline start (ms).
             scores (dict): Evaluation scores (e.g., groundedness, instruction adherence).
-            response_feedback (dict): Detailed feedback with follow probability and explanations for failed instructions.
-            residual_error (int): Residual error score for the iteration. See utils.py for calculation.
+            response_feedback (dict): Feedback for failed instructions.
+            residual_error (int): Residual error score.
             failed_instructions_count (int): Count of instructions not followed.
-            stop_reason (str): Reason for stopping or continuing (e.g., "max_iterations_reached").
+            stop_reason (str): Reason for stopping or continuing.
             response_text (str): The raw text response from the LLM.
             prompt (str): The prompt text used for this iteration.
-
-        Behavior:
-            - Appends the telemetry entry to the configured JSONL file.
-            - Adds a UTC timestamp and session ID for traceability.
         """
         telemetry = {
-            "timestamp": datetime.utcnow().isoformat() + "Z",
-            "session_id": self.session_id,
+            # not returned
+            "_timestamp": datetime.utcnow().isoformat() + "Z",
+            "_session_id": self.session_id,
+            # returned
             "iteration": iteration,
             "cumulative_latency_ms": cumulative_latency_ms,
             "scores": scores,
@@ -71,5 +54,22 @@ class TelemetryLogger:
             "prompt": prompt,
             "response_text": response_text,
         }
-        with open(self.log_path, "a") as f:
-            f.write(json.dumps(telemetry) + "\n")
+        self.memory_store.append(telemetry)
+
+    def get_all(self, include_meta=False):
+        """
+        Return all recorded telemetry entries.
+
+        Args:
+            include_meta (bool): If True, includes session_id and timestamp. Defaults to False.
+
+        Returns:
+            list: Telemetry entries, stripped of internal metadata unless requested.
+        """
+        if include_meta:
+            return self.memory_store
+        # Strip out keys starting with "_" for external return
+        sanitized = []
+        for entry in self.memory_store:
+            sanitized.append({k: v for k, v in entry.items() if not k.startswith("_")})
+        return sanitized

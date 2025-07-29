@@ -4,9 +4,7 @@ from aimon.reprompting_api.reprompter import Reprompter
 from aimon.reprompting_api.utils import toxicity_check, get_failed_instructions_count, get_failed_instructions, get_residual_error_score
 from aimon import Detect
 import time
-import logging
-
-logger = logging.getLogger(__name__)
+import random
 
 class RepromptingPipeline:
     """
@@ -92,7 +90,6 @@ class RepromptingPipeline:
                 }
         """
         iteration_outputs = {} # key: iteration number → dict(response_text, residual_error_score, failed_instructions_count)
-        telemetry_data = [] # stores per-iteration telemetry logs
         pipeline_start = time.time()
         iteration_num = 1
         
@@ -100,23 +97,12 @@ class RepromptingPipeline:
         curr_prompt = self._build_initial_prompt(context, user_query, user_instructions)
 
         # First LLM call
-        try:
-            curr_generated_text = self.llm_fn(curr_prompt)
-        except Exception as e:
-            logger.error(f"LLM call failed: {e}")
-            return self._terminate_with_failure(StopReasons.LLM_CALL_FAILED, iteration_num, curr_prompt, telemetry_data, iteration_outputs, pipeline_start)
-
+        curr_generated_text = self._call_llm(curr_prompt,self.config.user_model_max_retries)
+        
         # Evaluate response with AIMon
         curr_payload = self._build_aimon_payload(context, user_query, user_instructions, curr_generated_text)
-        try:
-            curr_result = self._detect_aimon_response(curr_payload)
-        except Exception as e:
-            logger.error(f"AIMon detect failed: {e}")
-            return self._terminate_with_failure(StopReasons.FEEDBACK_MODEL_FAILED, iteration_num, curr_prompt, telemetry_data, iteration_outputs, pipeline_start, generated_text=curr_generated_text)
-        if curr_result is None:
-                logger.error("AIMon detect returned no result.")
-                return self._terminate_with_failure(StopReasons.FEEDBACK_MODEL_FAILED, iteration_num, curr_prompt, telemetry_data, iteration_outputs, pipeline_start, generated_text=curr_generated_text)
-
+        curr_result = self._detect_aimon_response(curr_payload, self.config.feedback_model_max_retries)
+        
         # Get scores and detailed feedback on failured instructions
         scores, feedback = self.get_response_feedback(curr_result)
         self._record_iteration_output(iteration_outputs, iteration_num, curr_generated_text, curr_result)
@@ -129,7 +115,7 @@ class RepromptingPipeline:
                 break
             
             # Emit telemetry for this iteration
-            telemetry_entry = self._emit_iteration_telemetry(
+            self._emit_iteration_telemetry(
                 iteration_num,
                 pipeline_start,
                 scores,
@@ -139,30 +125,15 @@ class RepromptingPipeline:
                 curr_prompt,
                 curr_generated_text,
             )
-            telemetry_data.append(telemetry_entry)
 
             # Generate corrective prompt
             curr_prompt = self._build_corrective_prompt(curr_payload, curr_result)
             
             # Retry LLM call with corrective prompt
-            try:
-                curr_generated_text = self.llm_fn(curr_prompt)
-            except Exception as e:
-                logger.error(f"LLM call failed: {e}")
-                iteration_num += 1
-                return self._terminate_with_failure(StopReasons.LLM_CALL_FAILED, iteration_num, curr_prompt, telemetry_data, iteration_outputs, pipeline_start)
-
+            curr_generated_text = self._call_llm(curr_prompt,self.config.user_model_max_retries)
             # Re-evaluate the new response
             curr_payload = self._build_aimon_payload(context, user_query, user_instructions, curr_generated_text)
-            try:
-                curr_result = self._detect_aimon_response(curr_payload)
-            except Exception as e:
-                logger.error(f"AIMon detect failed: {e}")
-                iteration_num += 1
-                return self._terminate_with_failure(StopReasons.FEEDBACK_MODEL_FAILED, iteration_num, curr_prompt, telemetry_data, iteration_outputs, pipeline_start, generated_text=curr_generated_text)
-            if curr_result is None:
-                logger.error("AIMon detect returned no result.")
-                return self._terminate_with_failure(StopReasons.FEEDBACK_MODEL_FAILED, iteration_num, curr_prompt, telemetry_data, iteration_outputs, pipeline_start, generated_text=curr_generated_text)
+            curr_result = self._detect_aimon_response(curr_payload, self.config.feedback_model_max_retries)
 
             # Extract updated scores and feedback
             scores, feedback = self.get_response_feedback(curr_result)
@@ -170,7 +141,7 @@ class RepromptingPipeline:
             self._record_iteration_output(iteration_outputs, iteration_num, curr_generated_text, curr_result)
 
         # Final telemetry after loop exit
-        final_entry = self._emit_iteration_telemetry(
+        self._emit_iteration_telemetry(
             iteration_num,
             pipeline_start,
             scores,
@@ -180,7 +151,6 @@ class RepromptingPipeline:
             curr_prompt,
             curr_generated_text,
         )
-        telemetry_data.append(final_entry)
 
         # Select best response across all iterations
         best_output, best_failed_count = self._select_best_iteration(iteration_outputs)
@@ -188,7 +158,7 @@ class RepromptingPipeline:
         # Build final response payload
         response = {"best_response": best_output}
         if self.config.return_telemetry:
-            response["telemetry"] = telemetry_data
+            response["telemetry"] = self.telemetry.get_all()
         if self.config.return_aimon_summary:
             response["summary"] = self._gen_summary(iteration_num, best_failed_count)
 
@@ -207,7 +177,6 @@ class RepromptingPipeline:
             str: A formatted prompt including context, query, and instructions.
         """
         if not isinstance(user_instructions, list):
-            logger.warning("user_instructions is not a list. Defaulting to empty list.")
             user_instructions = []
         
         # Format the prompt with clear sections
@@ -234,7 +203,6 @@ class RepromptingPipeline:
             dict: Payload for AIMon evaluation.
         """
         if not isinstance(user_instructions, list):
-            logger.warning("user_instructions is not a list. Defaulting to empty list.")
             user_instructions = []
         payload = {
             'context': context,
@@ -244,51 +212,50 @@ class RepromptingPipeline:
         }
         return payload
 
-    def _detect_aimon_response(self, payload):
+    def _call_llm(self, prompt, max_attempts, base_delay=1):
         """
-        Evaluate a response using AIMon detectors. Retries up to one additional time if failed instruction explanations are empty.
+        Calls the LLM with exponential backoff. Raises an exception if all retries fail.
+
         Args:
-            payload (dict): AIMon input payload.
+            prompt (str): Prompt for the LLM.
+            max_attempts (int): Max retry attempts.
+            base_delay (float): Initial delay in seconds before backoff.
 
         Returns:
-            object: AIMon detection result object.
+            str: LLM response text.
+        """
+        for attempt in range(max_attempts):
+            try:
+                return self.llm_fn(prompt)
+            except Exception as e:
+                wait_time = base_delay * (2 ** attempt) + random.uniform(0, 0.1)
+                time.sleep(wait_time)
+        raise RuntimeError("LLM call failed after maximum retries.")
+    
+    def _detect_aimon_response(self, payload, max_attempts, base_delay=1):
+        """
+        Calls AIMon detect with exponential backoff. Raises an error if all retries fail.
         """
         aimon_context = f"{payload['context']}\n\nUser Query:\n{payload['user_query']}"
         aimon_query = f"{payload['user_query']}\n\nInstructions:\n{payload['instructions']}"
-
+        
         @self.detect
         def run_detection(query, instructions, generated_text, context):
             return query, instructions, generated_text, context
 
-        max_retries = self.config.feedback_model_max_retries
-
-        for attempt in range(max_retries):
-            _, _, _, _, result = run_detection(
-                aimon_query,
-                payload['instructions'],
-                payload['generated_text'],
-                aimon_context
-            )
-
-            # Check if explanations for failed instructions are empty
-            failed_explanations = []
+        for attempt in range(max_attempts):
             try:
-                for inst in result.detect_response.instruction_adherence.get("instructions_list", []):
-                    if not inst.get("label", True):  # Only failed
-                        failed_explanations.append(inst.get("explanation", "").strip())
-                for inst in result.detect_response.groundedness.get("instructions_list", []):
-                    if not inst.get("label", True):  # Only failed
-                        failed_explanations.append(inst.get("explanation", "").strip())
-            except Exception as e:
-                print(f"⚠️ Error checking failed explanations: {e}")
-
-            if all(failed_explanations) and all(e != "" for e in failed_explanations):
+                _, _, _, _, result = run_detection(
+                    aimon_query,
+                    payload['instructions'],
+                    payload['generated_text'],
+                    aimon_context
+                )
                 return result
-
-            if attempt < max_retries - 1:
-                print(f"⚠️ Empty explanation(s) for failed instructions detected. Retrying... (Attempt {attempt+1}/{max_retries})")
-                
-        return result
+            except Exception as e:
+                wait_time = base_delay * (2 ** attempt) + random.uniform(0, 0.1)
+                time.sleep(wait_time)
+        raise RuntimeError("AIMon detect call failed after maximum retries.")
 
     def get_response_feedback(self, result):
             """
@@ -339,28 +306,23 @@ class RepromptingPipeline:
         """
         # Max iterations reached
         if iteration_num >= self.config.max_iterations:
-            logger.info(f"Reached maximum number of iterations: {iteration_num}")
             return True, StopReasons.MAX_ITERATIONS_REACHED
         
         latency_limit_ms = self.config.latency_limit_ms
         if latency_limit_ms is not None:
             cumulative_latency = self._get_cumulative_latency(pipeline_start)
             if cumulative_latency > ((0.75) * latency_limit_ms):
-                logger.info(f"Latency limit almost exceeded or exceeded. Cumulative latency: {cumulative_latency}")
                 return True, StopReasons.LATENCY_LIMIT_EXCEEDED
         
         # Continue if toxicity is detected
         if toxicity_check(result):
-            logger.info("Toxicity detected. Continuing reprompting.")
             return False, StopReasons.CONTINUE_TOXICITY
 
         # Continue if there are still failed instructions
         if get_failed_instructions_count(result) > 0:
-            logger.info("Detected adherence/groundedness violations. Continuing reprompting.")
             return False, StopReasons.CONTINUE
 
         # All instructions followed
-        logger.info("All instructions followed; stopping reprompting.")
         return True, StopReasons.ALL_INSTRUCTIONS_ADHERED
 
     def _select_best_iteration(self, iteration_outputs):
@@ -486,7 +448,6 @@ class RepromptingPipeline:
             self.telemetry.emit(**entry)
         except Exception as e:
             error_msg = f"telemetry_emit_failed: {e}"
-            logger.warning(error_msg)
         return entry
     
     def _get_cumulative_latency(self, pipeline_start):
@@ -518,55 +479,4 @@ class RepromptingPipeline:
             "response_text": generated_text,
             "residual_error_score": get_residual_error_score(result),
             "failed_instructions_count": get_failed_instructions_count(result)
-        }
-
-    def _terminate_with_failure(self, stop_reason, iteration_num, prompt, telemetry_data, iteration_outputs, pipeline_start, generated_text=None):
-        """
-        Handle a fatal error by recording telemetry and returning a failure response.
-
-        Args:
-            stop_reason (str): Reason for failure.
-            iteration_num (int): Current iteration.
-            prompt (str): Prompt used at failure.
-            telemetry_data (list): Collected telemetry entries.
-            iteration_outputs (dict): Outputs from completed iterations.
-            pipeline_start (float): time of start.
-            generated_text (str, optional): Last generated text, if available.
-
-        Returns:
-            dict: Failure response with best available output, telemetry, and summary.
-        """
-        entry = self._emit_iteration_telemetry(
-            iteration_num=iteration_num,
-            pipeline_start=pipeline_start,
-            scores={},
-            feedback=[],
-            curr_result=None,
-            stop_reason=stop_reason,
-            curr_prompt=prompt,
-            curr_generated_text=generated_text or f"[ERROR: {stop_reason}]",
-        )
-        telemetry_data.append(entry)
-
-        # Determine best available output
-        best_output = "[ERROR: No valid response]"
-        valid = [
-            entry for entry in iteration_outputs.values()
-            if isinstance(entry.get("residual_error_score"), (int, float))
-        ]
-        if valid:
-            # Prefer the response with the lowest residual error
-            best_iter = min(valid, key=lambda x: x["residual_error_score"])
-            best_output = best_iter["response_text"]
-        elif generated_text:
-            # Fall back to the last generated text if no valid previous iterations exist
-            best_output = generated_text
-
-        return {
-            "best_response": best_output,
-            "telemetry": telemetry_data if self.config.return_telemetry else None,
-            "summary": (
-                f"Re-prompting terminated early due to {stop_reason}."
-                if self.config.return_aimon_summary else None
-            )
         }
