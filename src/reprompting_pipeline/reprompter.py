@@ -1,84 +1,74 @@
 from aimon.reprompting_api.utils import get_failed_instructions_count, get_failed_instructions, get_failed_toxicity_instructions
+from string import Template
+import logging
+
+logger = logging.getLogger(__name__)
 
 class Reprompter:     
     """
-    Generates corrective re-prompting instructions for improving LLM responses
+    Generates a template for corrective reprompting for improving LLM responses
     based on AIMon evaluation results. This class combines failed instruction
     feedback and background information to trigger iterative
     improvement prompts for stateless LLMs.
+    The template is designed to accept substitutions for system_prompt, user_query, and context.
 
     Designed for use in open-source contexts where developers may want to
     customize the prompt structure or language.
     """                                                       
 
-    def create_corrective_prompt(self, result, aimon_payload: dict) -> str:
+    def create_corrective_prompt(self, result, aimon_payload: dict) -> Template:
         """
-        Build a corrective prompt for an LLM response approximately in the following format:
-        
-            Revise your previous response to this query:
-            [user query]
-            Context:
-            [context]
-            Previous response:
-            [generated text]
-            
-            if failed instructions >= 3: 
-                    Your reply had major issues. Fix all points below.
-            if failed instructions between 2 and 3:
-                    Some parts were off. Improve using the notes below.
-            if less than 2:
-                    Almost there! Just a few small fixes needed.
-                    
-            Fix the following:
-            1. We are [1-follow probability] confident that the following instruction was not followed:
-            → Violated Instruction: [instruction]
-            → Explanation: [explanation]
-            …
-            Preserve correct content. Return only the revised output with no extra explanation.
-            Continue to follow these instructions:
-            [followed instructions]
+        Build a corrective prompt **template** for the next LLM response.
+
+        Placeholders:
+            {system_prompt} – The original system prompt
+            {user_query} – The user query
+            {context} – The context string
 
         Args:
             result: AIMon detection result object.
             aimon_payload (dict): Original payload containing:
+                - 'system_prompt' (str)
                 - 'user_query' (str)
                 - 'context' (str)
                 - 'generated_text' (str)
                 - 'instructions' (list[str])
 
         Returns:
-            str: Corrective prompt for the LLM.
-            
-        Raises:
-            RuntimeError: If corrective prompt generation fails.
+            Template: A string.Template object (with placeholders for substitution).
         """
         try:
             failed_instructions = get_failed_instructions(result)
             failed_count = get_failed_instructions_count(result)
+            logger.debug(f"Failed instructions ({failed_count}): {failed_instructions}")
 
             tone = self.determine_tone(failed_count)
-
             toxicity_feedback = self.get_toxicity_reprompt(result)
             failed_instructions_reprompt = self.format_failed_instructions(failed_instructions, toxicity_feedback)
-
             passed_instructions = self.format_passed_instructions(self.get_passed_instructions(result, aimon_payload))
+            generated_text = aimon_payload.get('generated_text', '')
 
-            prompt = (
-                f"Revise your previous response to this query:\n"
-                f"{aimon_payload['user_query']}\n\n"
-                f"Context:\n"
-                f"{aimon_payload['context']}\n\n"
-                f"Previous response:\n"
-                f"{aimon_payload['generated_text']}\n\n"
+            # Build template string (placeholders for substitution)
+            template_str = (
+                "Original system prompt:\n"
+                "${system_prompt}\n\n"
+                "Revise your previous response to this query:\n"
+                "${user_query}\n\n"
+                "Context:\n"
+                "${context}\n\n"
+                "Previous response:\n"
+                f"{generated_text}\n\n"
                 f"{tone}\n\n"
                 f"{failed_instructions_reprompt}\n\n"
                 "Preserve correct content. Return only the revised output with no extra explanation.\n"
-                f"{passed_instructions}\n\n"
+                f"{passed_instructions}\n"
             )
-            return prompt
+            logger.debug(f"Generated corrective prompt template:\n{template_str}")
+            return Template(template_str)
         except Exception as e:
+            logger.error(f"Error generating corrective prompt: {e}")
             raise RuntimeError(
-                f"Corrective prompt generation failed: Unexpected error of type {type(e).__name__} — {e}"
+                f"Corrective prompt template generation failed: {type(e).__name__} — {e}"
             ) from e
 
     def get_toxicity_reprompt(self, result) -> str:
@@ -98,7 +88,8 @@ class Reprompter:
         try:
             failed_instructions = get_failed_toxicity_instructions(result)
             if not failed_instructions:
-                return None
+                return ""
+            logger.info(f"Toxicity violations detected: {len(failed_instructions)}")
             lines = ["Your reply contained toxic content. Remove any harmful, abusive, or unsafe language."]
             for i, failed_instruction in enumerate(failed_instructions, start=1):
                 confidence = failed_instruction.get("score", 0.0) * 100
@@ -110,6 +101,7 @@ class Reprompter:
                 )
             return "\n\n".join(lines)
         except Exception as e:
+            logger.error(f"Error generating toxicity feedback: {e}")
             return ""
         
     def get_reprompt_per_instruction(self, failed_instruction):
@@ -137,6 +129,7 @@ class Reprompter:
                 f"→ Explanation: {failed_instruction.get('explanation', '[No explanation provided]')}\n"
             )
         except Exception as e:
+            logger.error(f"Error formatting failed instruction: {e}")
             raise RuntimeError(
                 f"Corrective prompt generation failed: Unexpected error of type {type(e).__name__} — {e}"
             ) from e
@@ -179,6 +172,7 @@ class Reprompter:
             failed_instructions = {item["instruction"] for item in get_failed_instructions(result)}
             return [instr for instr in all_instructions if instr not in failed_instructions]
         except Exception as e:
+            logger.error(f"Error determining passed instructions: {e}")
             return []
         
     def format_passed_instructions(self, passed_instructions) -> str:
@@ -194,7 +188,7 @@ class Reprompter:
         if not passed_instructions:
             return ""
         return (
-            "Continue to follow these instructions:\n" +
+            "You did well on these instructions. It is important that you continue to follow these instructions:\n" +
             "\n".join(f"- {instr}" for instr in passed_instructions)
         )
 

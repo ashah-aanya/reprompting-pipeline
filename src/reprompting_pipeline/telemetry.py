@@ -51,7 +51,7 @@ class TelemetryLogger:
             "residual_error": residual_error,
             "failed_instructions_count": failed_instructions_count,
             "stop_reason": stop_reason,
-            "prompt": prompt,
+            "promp_template": prompt,
             "response_text": response_text,
         }
         self.memory_store.append(telemetry)

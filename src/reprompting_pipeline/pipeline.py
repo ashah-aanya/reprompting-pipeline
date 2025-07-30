@@ -5,6 +5,10 @@ from aimon.reprompting_api.utils import toxicity_check, get_failed_instructions_
 from aimon import Detect
 import time
 import random
+from string import Template
+import logging
+
+logger = logging.getLogger(__name__)
 
 class RepromptingPipeline:
     """
@@ -17,19 +21,36 @@ class RepromptingPipeline:
       - Iterative corrective re-prompting until stopping conditions are met.
       - Collection and emission of telemetry for all iterations.
       
+    **Expected LLM function signature**:
+        llm_fn(recommended_prompt_template: Template, system_prompt: str, context: str, user_query: str) -> str
+      
     Attributes:
-        llm_fn (callable): Function to call the LLM. Must accept a string prompt and optionally accept a string query and string context and return a string response.
+        llm_fn (callable): Function to call the LLM. Must be a Callable with
+            -recommended_prompt_template: Template
+            -system_prompt: str
+            -context: str
+            -user_query: str
+
         config (RepromptingConfig): Configuration object with API keys and iteration limits.
         reprompter (Reprompter): Utility for generating corrective prompts based on evaluation feedback.
         telemetry (TelemetryLogger): Logger for capturing telemetry data.
         detect (Detect): AIMon detection client for evaluating model responses.
+        
+    Returns:
+        dict:
+            {
+                "best_response" (str): Best model response across all iterations.
+                "telemetry" (list, optional): Iteration-level telemetry if enabled.
+                "summary" (str, optional): Human-readable run summary if enabled.
+            }
     """
     def __init__(self, llm_fn, config):
         """
         Initialize pipeline with LLM callable and RepromptingConfig.
         
         Args:
-            llm_fn (callable): Function to call the LLM. Signature: llm_fn(prompt: str, context: str, user_query: str) -> str
+            llm_fn (callable): Function to call the LLM. 
+                Signature: llm_fn(recommended_prompt_template: Template, system_prompt: str, context: str, user_query: str) -> str
             config (RepromptingConfig): Configuration object with API keys and limits.
 
         """
@@ -64,7 +85,7 @@ class RepromptingPipeline:
             publish=self.config.publish
         )
         
-    def run(self, user_query, context, user_instructions, system_prompt=None):
+    def run(self, system_prompt: str, context: str, user_query: str, user_instructions):
         """
         Execute the full re-prompting pipeline.
         
@@ -89,21 +110,25 @@ class RepromptingPipeline:
                     "summary" (str, optional): Summary of the process if enabled.
                 }
         """
+        logger.info("Starting RepromptingPipeline run")
+        logger.debug(f"Inputs - System Prompt: {system_prompt}, Context: {context}, User Query: {user_query}, Instructions: {user_instructions}")
         iteration_outputs = {} # key: iteration number → dict(response_text, residual_error_score, failed_instructions_count)
         pipeline_start = time.time()
         iteration_num = 1
-        
-        if system_prompt is None:
-            system_prompt = ""
 
-        curr_prompt = system_prompt
+        curr_prompt = self._build_original_prompt()
+        logger.debug(f"Initial prompt template built: {curr_prompt.template}")
+
         
         # First LLM call
-        curr_generated_text = self._call_llm(curr_prompt,self.config.user_model_max_retries, context, user_query)
+        curr_generated_text = self._call_llm(curr_prompt,self.config.user_model_max_retries, system_prompt, context, user_query)
+        logger.debug(f"Initial LLM response: {curr_generated_text}")
+
         
         # Evaluate response with AIMon
-        curr_payload = self._build_aimon_payload(context, user_query, user_instructions, curr_generated_text)
+        curr_payload = self._build_aimon_payload(context, user_query, user_instructions, curr_generated_text, system_prompt)
         curr_result = self._detect_aimon_response(curr_payload, self.config.feedback_model_max_retries)
+        logger.debug(f"AIMon evaluation result: {curr_result}")
         
         # Get scores and detailed feedback on failured instructions
         scores, feedback = self.get_response_feedback(curr_result)
@@ -113,6 +138,7 @@ class RepromptingPipeline:
         stop_reason = None
         while True:
             should_stop, stop_reason = self._should_stop_reprompting(curr_result, iteration_num, pipeline_start)
+            logger.info(f"Iteration {iteration_num}: Stop decision: {should_stop}, Reason: {stop_reason}")
             if should_stop:
                 break
             
@@ -132,9 +158,9 @@ class RepromptingPipeline:
             curr_prompt = self._build_corrective_prompt(curr_payload, curr_result)
             
             # Retry LLM call with corrective prompt
-            curr_generated_text = self._call_llm(curr_prompt,self.config.user_model_max_retries)
+            curr_generated_text = self._call_llm(curr_prompt,self.config.user_model_max_retries, system_prompt, context, user_query)
             # Re-evaluate the new response
-            curr_payload = self._build_aimon_payload(context, user_query, user_instructions, curr_generated_text)
+            curr_payload = self._build_aimon_payload(context, user_query, user_instructions, curr_generated_text, system_prompt)
             curr_result = self._detect_aimon_response(curr_payload, self.config.feedback_model_max_retries)
 
             # Extract updated scores and feedback
@@ -163,10 +189,33 @@ class RepromptingPipeline:
             response["telemetry"] = self.telemetry.get_all()
         if self.config.return_aimon_summary:
             response["summary"] = self._gen_summary(iteration_num, best_failed_count)
+            
+        logger.info("RepromptingPipeline run completed")
+        logger.info(f"Best response selected with {best_failed_count} failed instructions remaining.")
 
-        return response     
+        return response  
 
-    def _build_aimon_payload(self, context, user_query, user_instructions, generated_text):
+    def _build_original_prompt(self) -> Template:
+        """
+        Build a reusable template for combining system_prompt, context, and user_query.
+        This returns a string.Template object so the caller can safely substitute values.
+        
+        Placeholders:
+            - system_prompt
+            - context
+            - user_query
+
+        Returns:
+            Template: A string.Template for building the base LLM prompt.
+        """
+        template_str = (
+            "System:\n${system_prompt}\n\n"
+            "Context:\n${context}\n\n"
+            "User Query:\n${user_query}"
+        )
+        return Template(template_str)
+
+    def _build_aimon_payload(self, context, user_query, user_instructions, generated_text, system_prompt):
         """
         Constructs AIMon input payload.
 
@@ -186,35 +235,41 @@ class RepromptingPipeline:
             'user_query': user_query,
             'generated_text': generated_text,
             'instructions': user_instructions,
+            'system_prompt' : system_prompt
         }
         return payload
 
-    def _call_llm(self, prompt, max_attempts, base_delay=1, context = None, user_query = None,):
+    def _call_llm(self, prompt_template: Template, max_attempts, system_prompt=None, context=None, user_query=None, base_delay=1):
         """
         Calls the LLM with exponential backoff. Retries if the LLM call fails
         OR returns a non-string value. Raises an exception if all retries fail.
 
         Args:
-            prompt (str): Prompt for the LLM.
+            prompt_template (Template): Prompt template for the LLM.
             max_attempts (int): Max retry attempts.
             base_delay (float): Initial delay in seconds before backoff.
 
         Returns:
             str: LLM response text.
+
+        Raises:
+            RuntimeError: If the LLM call fails or returns an invalid type after all retries.
         """
+        last_exception = None
         for attempt in range(max_attempts):
             try:
-                if context is None and user_query is None:
-                    result = self.llm_fn(prompt)
-                else:
-                    result = self.llm_fn(prompt, context, user_query)
+                logger.debug(f"LLM call attempt {attempt+1} with prompt template.")
+                result = self.llm_fn(prompt_template, system_prompt, context, user_query)
+                # Validate type
                 if not isinstance(result, str):
-                    raise TypeError(f"LLM returned non-string type: {type(result).__name__}, value: {result}")
+                    raise TypeError(f"LLM returned invalid type {type(result).__name__}, expected str.")
                 return result
             except Exception as e:
+                last_exception = e
+                logger.warning(f"LLM call failed on attempt {attempt+1}: {e}")
                 wait_time = base_delay * (2 ** attempt) + random.uniform(0, 0.1)
                 time.sleep(wait_time)
-        raise RuntimeError("LLM call failed or returned invalid type after maximum retries.")
+        raise RuntimeError(f"LLM call failed or returned invalid type after maximum retries. Last error: {last_exception}")
     
     def _detect_aimon_response(self, payload, max_attempts, base_delay=1):
         """
@@ -245,6 +300,7 @@ class RepromptingPipeline:
 
         for attempt in range(max_attempts):
             try:
+                logger.debug(f"AIMon detect attempt {attempt+1} with payload: {payload}")
                 _, _, _, _, result = run_detection(
                     aimon_query,
                     payload['instructions'],
@@ -253,6 +309,7 @@ class RepromptingPipeline:
                 )
                 return result
             except Exception as e:
+                logger.debug(f"AIMon detect failed on attempt {attempt+1}: {e}")
                 wait_time = base_delay * (2 ** attempt) + random.uniform(0, 0.1)
                 time.sleep(wait_time)
         raise RuntimeError("AIMon detect call failed after maximum retries.")
@@ -435,6 +492,8 @@ class RepromptingPipeline:
         residual_error = get_residual_error_score(curr_result) if curr_result else None
         failed_count = get_failed_instructions_count(curr_result) if curr_result else None
         
+        prompt_text = curr_prompt.template 
+        
         entry = self._build_telemetry_entry(
             iteration_num,
             cumulative_latency_ms,
@@ -443,14 +502,13 @@ class RepromptingPipeline:
             residual_error,
             failed_count,
             stop_reason,
-            curr_prompt,
+            prompt_text,
             curr_generated_text,
         )
         try:
             self.telemetry.emit(**entry)
         except Exception as e:
-            # Log error silently without breaking the pipeline
-            print(f"[Warning] Telemetry emission failed: {e}")
+            logger.warning(f"[Warning] Telemetry emission failed: {e}")
         return entry
     
     def _get_cumulative_latency(self, pipeline_start):

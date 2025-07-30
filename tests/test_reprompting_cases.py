@@ -1,32 +1,38 @@
+import os
+import pytest
+from string import Template
+from together import Together
 from aimon.reprompting_api.config import RepromptingConfig
 from aimon.reprompting_api.runner import run_reprompting_pipeline
-import os
-from together import Together
 
 TOGETHER_API_KEY = os.environ.get("TOGETHER_API_KEY")
 AIMON_API_KEY = os.environ.get("AIMON_API_KEY")
 
 client = Together(api_key=TOGETHER_API_KEY)
 
-def my_llm(system_prompt: str, context = None, user_query = None) -> str:
-    """Normal working LLM."""
-    prompt = system_prompt
-    if context:
-        prompt += f"\nContext: {context}"
-    if user_query:
-        prompt += f"\n Query: {user_query}"
-    print("printing prompt")
-    print(prompt)
-    response = client.chat.completions.create(
-        model="mistralai/Mistral-7B-Instruct-v0.2",
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=256,
-        temperature=0
-    )
-    return response.choices[0].message.content
+# --- Fixtures ---
 
-# --- MOCKED CONFIG FUNCTIONS ---
-def get_config():
+@pytest.fixture
+def my_llm():
+    def _my_llm(recommended_prompt_template: Template, system_prompt, context, user_query) -> str:
+        filled_prompt = recommended_prompt_template.substitute(
+            system_prompt=system_prompt or "",
+            context=context or "",
+            user_query=user_query or ""
+        )
+        print("====prompt===")
+        print(filled_prompt)
+        response = client.chat.completions.create(
+            model="mistralai/Mistral-7B-Instruct-v0.2",
+            messages=[{"role": "user", "content": filled_prompt}],
+            max_tokens=256,
+            temperature=0
+        )
+        return response.choices[0].message.content
+    return _my_llm
+
+@pytest.fixture
+def base_config():
     return RepromptingConfig(
         aimon_api_key=AIMON_API_KEY,
         publish=False,
@@ -35,7 +41,9 @@ def get_config():
         application_name="api_test",
         max_iterations=2,
     )
-def get_config_without_telemetry():
+
+@pytest.fixture
+def config_without_telemetry():
     return RepromptingConfig(
         aimon_api_key=AIMON_API_KEY,
         publish=False,
@@ -45,7 +53,8 @@ def get_config_without_telemetry():
         max_iterations=2,
     )
 
-def get_config_with_low_latency_limit():
+@pytest.fixture
+def config_low_latency():
     return RepromptingConfig(
         aimon_api_key=AIMON_API_KEY,
         publish=False,
@@ -55,8 +64,9 @@ def get_config_with_low_latency_limit():
         max_iterations=2,
         latency_limit_ms=100
     )
-    
-def get_config_with_latency_limit():
+
+@pytest.fixture
+def config_high_latency():
     return RepromptingConfig(
         aimon_api_key=AIMON_API_KEY,
         publish=False,
@@ -66,8 +76,9 @@ def get_config_with_latency_limit():
         max_iterations=3,
         latency_limit_ms=5000
     )
-    
-def get_config_with_iteration_limit():
+
+@pytest.fixture
+def config_iteration_limit():
     return RepromptingConfig(
         aimon_api_key=AIMON_API_KEY,
         publish=False,
@@ -77,118 +88,85 @@ def get_config_with_iteration_limit():
         max_iterations=-1,
     )
 
-# --- Test Runs ---
+# --- Tests ---
 
-def test_low_latency_limit():
-    config = get_config_with_low_latency_limit()
-    return run_reprompting_pipeline(
+@pytest.mark.integration
+def test_low_latency_limit(my_llm, config_low_latency):
+    result = run_reprompting_pipeline(
         user_query="Test latency limit termination return",
         context="Context",
         llm_fn=my_llm,
-        reprompting_config=config,
+        reprompting_config=config_low_latency,
         user_instructions=[]
     )
-    
-def test_latency_limit():
-    config = get_config_with_latency_limit()
-    return run_reprompting_pipeline(
+    assert "best_response" in result
+
+@pytest.mark.integration
+def test_latency_limit(my_llm, config_high_latency):
+    result = run_reprompting_pipeline(
         user_query="What is context?",
         context="Context",
         llm_fn=my_llm,
-        reprompting_config=config,
+        reprompting_config=config_high_latency,
         user_instructions=["Do not use the letter e", "Only use the letter e"]
     )
+    assert "best_response" in result
 
-def test_iteration_limit():
-    config = get_config_with_iteration_limit()
-    return run_reprompting_pipeline(
+@pytest.mark.integration
+def test_iteration_limit(my_llm, config_iteration_limit):
+    result = run_reprompting_pipeline(
         user_query="What's the policy?",
-        context="hi",  # Empty context
+        context="hi",
         llm_fn=my_llm,
-        reprompting_config=config,
-        user_instructions=[]  # No instructions
+        reprompting_config=config_iteration_limit,
+        user_instructions=[]
     )
-    
-def test_empty_context_and_instructions():
-    config = get_config()
-    return run_reprompting_pipeline(
-        user_query="What's the policy?",
-        context="",  # Empty context
-        llm_fn=my_llm,
-        reprompting_config=config,
-        user_instructions=[]  # No instructions
-    )
+    assert "best_response" in result
 
-def test_no_telemetry():
-    """Test with telemetry and summary disabled."""
-    config = get_config_without_telemetry()
+@pytest.mark.integration
+def test_empty_context_and_instructions(my_llm, base_config):
+    result = run_reprompting_pipeline(
+        user_query="What's the policy?",
+        context="",
+        llm_fn=my_llm,
+        reprompting_config=base_config,
+        user_instructions=[]
+    )
+    assert "best_response" in result
+
+@pytest.mark.integration
+def test_no_telemetry(my_llm, config_without_telemetry):
     result = run_reprompting_pipeline(
         user_query="What's the policy?",
         context="Context for telemetry disabled run",
         llm_fn=my_llm,
-        reprompting_config=config,
+        reprompting_config=config_without_telemetry,
         user_instructions=[]
     )
-    # Ensure telemetry and summary are not present
     assert "telemetry" not in result
     assert "summary" not in result
-    return result
 
-def test_no_system_prompt():
-    """Test with telemetry and summary disabled."""
-    config = get_config()
-    return run_reprompting_pipeline(
+@pytest.mark.integration
+def test_no_system_prompt(my_llm, base_config):
+    result = run_reprompting_pipeline(
         user_query="What's the policy?",
         context="Context for telemetry disabled run",
         llm_fn=my_llm,
-        reprompting_config=config,
-        # contradictory instructions to test reprompting prompt
+        reprompting_config=base_config,
         user_instructions=["use the letter e only", "do not use the letter e"]
     )
+    assert "best_response" in result
 
-def test_with_system_prompt():
-    """Test with telemetry and summary disabled."""
-    config = get_config()
-    return run_reprompting_pipeline(
+@pytest.mark.integration
+def test_with_system_prompt(my_llm, base_config):
+    result = run_reprompting_pipeline(
         user_query="What's the policy?",
         context="Context for telemetry disabled run",
         llm_fn=my_llm,
-        reprompting_config=config,
-        # contradictory instructions to test reprompting prompt
-        user_instructions=["use the letter e only", "do not use the letter e"],
-        system_prompt= "this is a system prompt"
+        reprompting_config=base_config,
+        user_instructions=["use the letter e only", "do not use the letter e", "use a neutral tone"],
+        system_prompt="this is a system prompt"
     )
-
-if __name__ == "__main__":
-    print("\n=== Running Selected Tests ===\n")
-    print(my_llm("This is a test system prompt.", context="Sample context", user_query="What is the policy?"))
-
-
-    """low_latency_result = test_low_latency_limit()
-    print("\n--- test_low_latency_limit ---")
-    print(low_latency_result)
-    
-    latency_result = test_latency_limit()
-    print("\n--- test_latency_limit ---")
-    print(latency_result)
-
-    iteration_result = test_iteration_limit()
-    print("\n--- test_iteration_limit ---")
-    print(iteration_result)
-    
-    empty_context_and_instructions_result = test_empty_context_and_instructions()
-    print("\n--- test_empty_context_and_instructions ---")
-    print(empty_context_and_instructions_result)"""
-    
-    no_telemetry_result = test_no_telemetry()
-    print("\n--- test_no_telemetry ---")
-    print(no_telemetry_result)
-    
-    no_system_prompt_result = test_no_system_prompt()
-    print("\n--- test_no_system_prompt ---")
-    print(no_system_prompt_result)
-    
-    system_prompt_result = test_with_system_prompt()
-    print("\n--- test_with_system_prompt ---")
-    print(system_prompt_result)
-    
+    assert "best_response" in result
+    assert "telemetry" in result
+    assert "summary" in result
