@@ -35,7 +35,7 @@ Each iteration can log detailed telemetry (JSON), giving you full visibility int
 > **Quick Start:**  
 > Explore the [Re‑Prompting Pipeline Colab Notebook] for a step‑by‑step implementation.
 
-### Function Signature
+### `run_reprompting_pipeline` Function Signature
 
 ```python
 from aimon.reprompting_api.runner import run_reprompting_pipeline
@@ -85,7 +85,7 @@ def run_reprompting_pipeline(
   - **`prompt`** *(str)*: The corrective prompt template with placeholders sent to the LLM for this iteration.  
   - **`response_text`** *(str)*: The raw response produced by the LLM.    
 
-### Implementing your `llm_fn`
+### `llm_fn` Implementation
 
 To use the re‑prompting pipeline, you must provide your own Callable LLM function. This function acts as the connector between the pipeline and any black‑box model (e.g., TogetherAI, OpenAI, Anthropic, or a local model).
 The function should take in the following parameters:
@@ -134,7 +134,7 @@ def my_llm(recommended_prompt_template: Template, system_prompt, context, user_q
     output = response.choices[0].message.content
     return output
 ```
-### RepromptingConfig
+### `RepromptingConfig`
 
 The `RepromptingConfig` object controls how the re‑prompting pipeline behaves.  
 If no configuration is provided, the pipeline uses the defaults below.  
@@ -163,9 +163,9 @@ If no configuration is provided, the pipeline uses the defaults below.
 > If `llm_fn` or the feedback model (IFE) fails after the configured retries, the pipeline raises a `RuntimeError`. Use `user_model_max_retries` and `feedback_model_max_retries` in `RepromptingConfig` to adjust retry behavior.
 
 
-### Usage Example
+## Usage Example
 
-#### Sample Implementation
+### Sample Implementation
 ```python
 from aimon.reprompting_api.config import RepromptingConfig
 from aimon.reprompting_api.runner import run_reprompting_pipeline
@@ -236,7 +236,7 @@ print("\n=== TELEMETRY ===")
 print(json.dumps(result.get("telemetry"), indent=2))
 
 ```
-#### Integrating with RAG frameworks
+### Integrating with RAG frameworks
 The pipeline is retrieval‑framework agnostic, meaning you can integrate it with any RAG system (e.g., LlamaIndex, LangChain, custom retrievers) while maintaining full control over retrieval behavior.
 
 How it works:
@@ -244,16 +244,14 @@ How it works:
 2. Normalize the retrieved content into a string (e.g., join text chunks).
 3. Pass this string into the pipeline using the context parameter.
 
-#### Limitations
+### Limitations
 
 - Requires clear, deterministic instructions. Vague or conflicting ones cannot be fixed
 - Subjective attributes (e.g., tone, creativity) improve inconsistently
 - Adds latency and cost per iteration (tune `latency_limit_ms` and `max_iterations` to balance speed with response quality)
 
-### Resources
+## Resources and Further Reading
 - [Re‑Prompting Pipeline Colab Notebook]: Step‑by‑step demo  
 - [Open‑source Pipeline]: Experiment with and extend the pipeline  
-
-### Further Reading
 - [Re‑Prompting: A Smarter Loop for Smarter Models]: Blog with detailed results and design decisions
 
