@@ -106,6 +106,8 @@ Implement your LLM function to do the following:
 **Example Implementation:**
 The following implementation leverages Gemma4B via TogetherAI, but you can swap `model` for any Together-hosted model (e.g., 'mistralai/Mistral-7B-Instruct-v0.2'). You can also replace the whole block with any LLM call (OpenAI, Claude, HuggingFace, etc.)
 
+> Tip: Use safe_substitute() instead of substitute() to prevent runtime errors if any placeholder values are missing.
+
 ```python
 from string import Template
 from together import Together
@@ -115,8 +117,8 @@ client = Together(api_key=TOGETHER_API_KEY)
 
 def my_llm(recommended_prompt_template: Template, system_prompt, context, user_query) -> str:
 
-    # substitute placeholders in the pipeline-provided template with appropriate values
-    filled_prompt = recommended_prompt_template.substitute(
+    # safely substitute placeholders in the pipeline-provided template with appropriate values
+    filled_prompt = recommended_prompt_template.safe_substitute(
         system_prompt=system_prompt,
         context=context,
         user_query=user_query
