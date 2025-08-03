@@ -106,7 +106,7 @@ Implement your LLM function to do the following:
 **Example Implementation:**
 The following implementation leverages Gemma4B via TogetherAI, but you can swap `model` for any Together-hosted model (e.g., 'mistralai/Mistral-7B-Instruct-v0.2'). You can also replace the whole block with any LLM call (OpenAI, Claude, HuggingFace, etc.)
 
-> Tip: Use safe_substitute() instead of substitute() to prevent runtime errors if any placeholder values are missing.
+> Tip: Use `safe_substitute()` instead of `substitute()` to prevent runtime errors if any placeholder values are missing.
 
 ```python
 from string import Template
@@ -126,7 +126,7 @@ def my_llm(recommended_prompt_template: Template, system_prompt, context, user_q
 
     # replace this block with any LLM call you want. (OpenAI, Claude, HuggingFace, etc.)
     response = client.chat.completions.create(
-        model="google/gemma-3n-E4B-it", # this can be any Together-hosted model (e.g., 'mistralai/Mistral-7B-Instruct-v0.2')
+        model="google/gemma-3n-E4B-it",
         messages=[{"role": "user", "content": filled_prompt}],
         max_tokens=256,
         temperature=0
