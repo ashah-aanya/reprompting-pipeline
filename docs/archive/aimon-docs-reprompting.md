@@ -33,7 +33,7 @@ Each iteration can log detailed telemetry (JSON), giving you full visibility int
 ## Implementation
 
 > **Quick Start:**  
-> Explore the [Re‑Prompting Pipeline Colab Notebook] for a step‑by‑step implementation.
+> Explore the [Re‑Prompting Pipeline Colab Notebook]((https://colab.research.google.com/drive/1s6lup_4_v2YpE2vlPz-fkP6_BLloKouj?usp=sharing)) for a step‑by‑step implementation.
 
 ### `run_reprompting_pipeline` Function Signature
 
@@ -253,7 +253,7 @@ How it works:
 - Adds latency and cost per iteration (tune `latency_limit_ms` and `max_iterations` to balance speed with response quality)
 
 ## Resources and Further Reading
-- [Re‑Prompting Pipeline Colab Notebook]: Step‑by‑step demo  
-- [Open‑source Pipeline]: Experiment with and extend the pipeline  
+- [Re‑Prompting Pipeline Colab Notebook:](https://colab.research.google.com/drive/1s6lup_4_v2YpE2vlPz-fkP6_BLloKouj?usp=sharing) Step‑by‑step demo  
+- [Open‑source Pipeline:](https://github.com/aimonlabs/aimon-python-sdk/tree/main/aimon/reprompting_api) Experiment with and extend the pipeline  
 - [Re‑Prompting: A Smarter Loop for Smarter Models]: Blog with detailed results and design decisions
 
