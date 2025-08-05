@@ -254,6 +254,6 @@ How it works:
 
 ## Resources and Further Reading
 - [Re‑Prompting Pipeline Colab Notebook](https://colab.research.google.com/drive/1s6lup_4_v2YpE2vlPz-fkP6_BLloKouj?usp=sharing): Step‑by‑step demo  
-- [Open‑source Pipeline:](https://github.com/aimonlabs/aimon-python-sdk/tree/main/aimon/reprompting_api) Experiment with and extend the pipeline  
+- [Open‑source Pipeline](https://github.com/aimonlabs/aimon-python-sdk/tree/main/aimon/reprompting_api): Experiment with and extend the pipeline  
 - [Agentic Reflection Part 3: A Smarter Loop for Smarter Models](https://www.aimon.ai/posts/reprompting-smarter-loop-for-smarter-models/): Blog with detailed results and design decisions
 
