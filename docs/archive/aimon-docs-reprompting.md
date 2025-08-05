@@ -13,7 +13,7 @@ The **Automated Re‑Prompting Pipeline** improves Large Language Model (LLM) ou
 - Maintain **speed** and **scalability** with a fully stateless design
 
 > **Deep Dive:**  
-> Read our [Re-Prompting: A Smarter Loop for Smarter Models] for design decisions, details, and performance insights.
+> Read our [Agentic Reflection Part 3: A Smarter Loop for Smarter Models](https://www.aimon.ai/posts/reprompting-smarter-loop-for-smarter-models/) for design decisions, details, and performance insights.
 
 ---
 
@@ -255,5 +255,5 @@ How it works:
 ## Resources and Further Reading
 - [Re‑Prompting Pipeline Colab Notebook:](https://colab.research.google.com/drive/1s6lup_4_v2YpE2vlPz-fkP6_BLloKouj?usp=sharing) Step‑by‑step demo  
 - [Open‑source Pipeline:](https://github.com/aimonlabs/aimon-python-sdk/tree/main/aimon/reprompting_api) Experiment with and extend the pipeline  
-- [Re‑Prompting: A Smarter Loop for Smarter Models]: Blog with detailed results and design decisions
+- [Agentic Reflection Part 3: A Smarter Loop for Smarter Models](https://www.aimon.ai/posts/reprompting-smarter-loop-for-smarter-models/): Blog with detailed results and design decisions
 
