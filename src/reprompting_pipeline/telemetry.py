@@ -1,6 +1,5 @@
-import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 class TelemetryLogger:
     """
@@ -41,7 +40,7 @@ class TelemetryLogger:
         """
         telemetry = {
             # not returned
-            "_timestamp": datetime.utcnow().isoformat() + "Z",
+            "_timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "_session_id": self.session_id,
             # returned
             "iteration": iteration,

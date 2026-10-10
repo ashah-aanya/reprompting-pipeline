@@ -1,5 +1,5 @@
 """
-utils.py — Utility functions for processing AIMon reprompting detector results.
+utils.py — Utility functions for processing re-prompting judge results.
 
 This module provides helper functions for:
 - Extracting failed instructions across instruction adherence, groundedness, and toxicity detectors.
@@ -71,7 +71,7 @@ def retry(
         return f_retry
     return deco_retry
 
-# toxicity threshold for AIMon detection; Follow probabilities above this are considered failures
+# toxicity threshold for the judge; Follow probabilities above this are considered failures
 TOXICITY_THRESHOLD = 0.25
 
 def _count_toxicity_failures(result) -> int:
@@ -79,14 +79,14 @@ def _count_toxicity_failures(result) -> int:
     Count the number of toxicity instructions whose follow probability exceeds the threshold.
 
     Args:
-        result: AIMon detection result containing a `toxicity` section.
+        result: Judge result containing a `toxicity` section.
 
     Returns:
         int: Number of failed toxicity instructions.
     """
     return sum(
         1
-        for inst in result.detect_response.toxicity.get("instructions_list", [])
+        for inst in result.toxicity.get("instructions_list", [])
         if inst.get("follow_probability", 0.0) > TOXICITY_THRESHOLD
     )
 
@@ -95,7 +95,7 @@ def toxicity_check(result) -> bool:
     Check whether any toxicity instructions exceed the threshold.
 
     Args:
-        result: AIMon detection result containing a `toxicity` section.
+        result: Judge result containing a `toxicity` section.
 
     Returns:
         bool: True if at least one toxicity instruction exceeds the threshold, False otherwise.
@@ -108,7 +108,7 @@ def get_failed_toxicity_instructions(result) -> List[dict]:
     Extract failed toxicity instructions exceeding the threshold.
 
     Args:
-        result: AIMon detection result containing a `toxicity` section.
+        result: Judge result containing a `toxicity` section.
 
     Returns:
         List[dict]: A list of dictionaries, each describing a failed toxicity instruction with:
@@ -119,7 +119,7 @@ def get_failed_toxicity_instructions(result) -> List[dict]:
             - explanation (str): The explanation for the failure.
     """
     failed = []
-    for inst in result.detect_response.toxicity.get("instructions_list", []):
+    for inst in result.toxicity.get("instructions_list", []):
         if inst.get("follow_probability", 0.0) > TOXICITY_THRESHOLD:
             failed.append({
                 "type": "toxicity_failure",
@@ -135,7 +135,7 @@ def get_failed_instructions(result) -> List[dict]:
     Extract all failed instructions from adherence, groundedness, and toxicity detectors.
 
     Args:
-        result: AIMon detection result containing `instruction_adherence`, `groundedness`, and `toxicity` sections.
+        result: Judge result containing `instruction_adherence`, `groundedness`, and `toxicity` sections.
 
     Returns:
         List[dict]: A list of failed instructions with:
@@ -148,7 +148,7 @@ def get_failed_instructions(result) -> List[dict]:
     failed = []
     # Adherence & groundedness
     for source in ["instruction_adherence", "groundedness"]:
-        for inst in getattr(result.detect_response, source, {}).get("instructions_list", []):
+        for inst in getattr(result, source, {}).get("instructions_list", []):
             if not inst.get("label", True):
                 failed.append({
                     "type": f"{source}_failure",
@@ -166,18 +166,18 @@ def get_failed_instructions_count(result) -> int:
     Count all failed instructions across adherence, groundedness, and toxicity.
 
     Args:
-        result: AIMon detection result containing `instruction_adherence`, `groundedness`, and `toxicity` sections.
+        result: Judge result containing `instruction_adherence`, `groundedness`, and `toxicity` sections.
 
     Returns:
         int: Total number of failed instructions.
     """
     count = 0
     # Instruction adherence
-    for inst in result.detect_response.instruction_adherence.get("instructions_list", []):
+    for inst in result.instruction_adherence.get("instructions_list", []):
         if not inst.get("label", True):
             count += 1
     # Groundedness
-    for inst in result.detect_response.groundedness.get("instructions_list", []):
+    for inst in result.groundedness.get("instructions_list", []):
         if not inst.get("label", True):
             count += 1
     count += _count_toxicity_failures(result)  # Toxicity
@@ -201,13 +201,13 @@ def get_residual_error_score(result):
     for source in ["groundedness", "instruction_adherence"]:
         combined_probs.extend([
             item["follow_probability"]
-            for item in getattr(result.detect_response, source, {}).get("instructions_list", [])
+            for item in getattr(result, source, {}).get("instructions_list", [])
         ])
 
     # For toxicity, invert the follow probability
     combined_probs.extend([
         1 - item["follow_probability"]
-        for item in getattr(result.detect_response, "toxicity", {}).get("instructions_list", [])
+        for item in getattr(result, "toxicity", {}).get("instructions_list", [])
     ])
 
     residual_error_score = penalized_average(combined_probs) if combined_probs else 0.0

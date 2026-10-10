@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "reprompting-pipeline"
+version = "0.1.0"
+description = "Iteratively improve LLM outputs: an LLM judge audits each response and a corrective re-prompt asks the model to fix what failed."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [{ name = "Aanya Shah" }]
+dependencies = [
+    # 2.x: the judge uses its `json_schema` response_format shape. (together itself needs Python >= 3.10.)
+    "together>=2.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: calls the live Together AI API (needs TOGETHER_API_KEY); skipped otherwise",
+]

@@ -1,4 +1,4 @@
-from aimon.reprompting_api.utils import get_failed_instructions_count, get_failed_instructions, get_failed_toxicity_instructions
+from reprompting_pipeline.utils import get_failed_instructions_count, get_failed_instructions, get_failed_toxicity_instructions
 from string import Template
 import logging
 
@@ -7,7 +7,7 @@ logger = logging.getLogger(__name__)
 class Reprompter:     
     """
     Generates a template for corrective reprompting for improving LLM responses
-    based on AIMon evaluation results. This class combines failed instruction
+    based on judge evaluation results. This class combines failed instruction
     feedback and background information to trigger iterative
     improvement prompts for stateless LLMs.
     The template is designed to accept substitutions for system_prompt, user_query, and context.
@@ -16,7 +16,7 @@ class Reprompter:
     customize the prompt structure or language.
     """                                                       
 
-    def create_corrective_prompt(self, result, aimon_payload: dict) -> Template:
+    def create_corrective_prompt(self, result, payload: dict) -> Template:
         """
         Build a corrective prompt **template** for the next LLM response.
 
@@ -26,8 +26,8 @@ class Reprompter:
             {context} – The context string
 
         Args:
-            result: AIMon detection result object.
-            aimon_payload (dict): Original payload containing:
+            result: Judge result object.
+            payload (dict): Original payload containing:
                 - 'system_prompt' (str)
                 - 'user_query' (str)
                 - 'context' (str)
@@ -45,8 +45,8 @@ class Reprompter:
             tone = self.determine_tone(failed_count)
             toxicity_feedback = self.get_toxicity_reprompt(result)
             failed_instructions_reprompt = self.format_failed_instructions(failed_instructions, toxicity_feedback)
-            passed_instructions = self.format_passed_instructions(self.get_passed_instructions(result, aimon_payload))
-            generated_text = aimon_payload.get('generated_text', '')
+            passed_instructions = self.format_passed_instructions(self.get_passed_instructions(result, payload))
+            generated_text = payload.get('generated_text', '')
 
             # Build template string (placeholders for substitution)
             template_str = (
@@ -80,7 +80,7 @@ class Reprompter:
             → Explanation: "..."
 
         Args:
-            result: AIMon detection result.
+            result: Judge result.
 
         Returns:
             str: Toxicity-specific feedback, or None if no toxicity detected.
@@ -156,19 +156,19 @@ class Reprompter:
             return "No major issues."
         return "\n\n".join(lines)
 
-    def get_passed_instructions(self, result, aimon_payload):
+    def get_passed_instructions(self, result, payload):
         """
         Retrieve instructions that passed all adherence and groundedness checks.
 
         Args:
-            result: AIMon detection result.
-            aimon_payload (dict): Original payload containing the full instruction list.
+            result: Judge result.
+            payload (dict): Original payload containing the full instruction list.
 
         Returns:
             list: Passed instruction strings.
         """
         try:
-            all_instructions = aimon_payload.get("instructions", [])
+            all_instructions = payload.get("instructions", [])
             failed_instructions = {item["instruction"] for item in get_failed_instructions(result)}
             return [instr for instr in all_instructions if instr not in failed_instructions]
         except Exception as e:
