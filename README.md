@@ -1,17 +1,33 @@
 # reprompting-pipeline
 
-Make any LLM follow instructions better, without retraining it.
+What if your Large Language Models (LLMs) could rewrite its own answers until it got things right … *automatically?*
 
-The pipeline asks your model for an answer, has a second LLM (the **judge**) audit that answer, and, if the audit finds problems, sends the model a targeted correction prompt. It repeats until the answer passes or a limit is reached, then returns the best answer it saw.
+Anyone who’s worked with LLMs knows the drill. You give a model a prompt with specific instructions and still, the response comes back missing something. So you tweak the prompt and try again, asking it to fix the tone, then rephrase for conciseness. Eventually, you may get what you need but only after multiple rounds.
 
-It treats your model as a black box: you give it a plain Python function, so it works with OpenAI, Anthropic, Together, a local model, or anything else.
+Re-prompting automates that loop. Instead of relying on massive models with high latency or manually fine-tuning outputs, this is a lightweight, stateless system that sits on top of any black-box LLM. A judge model gives precise feedback, and the pipeline turns it into a targeted corrective prompt to extract better outputs. You give it your model as a plain Python function, so it works with OpenAI, Anthropic, Together, a local model, or anything else.
+
+## Goals
+
+The pipeline is designed to:
+
+- Boost instruction adherence
+- Minimize hallucinations
+- Flag and fix toxicity
+- Stay fast and token-efficient
+- Keep all models stateless for scalability
+
+## How it works
+
+Think of our system as an editorial feedback loop for LLM responses. With each pass through, the original LLM draft is reviewed and returned with targeted feedback to fuel iterative improvement until it converges on an error-free output. Each iteration can optionally log a JSON blob of diagnostics for iteration progression, providing full transparency into how the model evolves with each re-prompt.
 
 ![The re-prompting loop](docs/img/reprompting-pipeline.png)
 
-1. **Generate:** your prompt goes to your LLM, producing a first response.
-2. **Judge:** a small Together AI model checks the response for instruction adherence, groundedness (hallucination against your context) and toxicity, and explains each failure.
-3. **Re-prompt:** a corrective prompt is built from the failures ("you violated X because Y; keep doing Z").
-4. **Refine:** your LLM revises; the loop repeats until all checks pass, `max_iterations` is hit, or the latency budget runs out.
+1. **Draft the initial response (P₀ → R₀).** The user sends a query, context, and instructions to a stateless LLM that generates a response that may fail to fully comply with the provided, especially critical, instructions.
+2. **Audit with the judge (R₀ → E₀).** A small Together AI model checks the response for instruction adherence, groundedness (hallucination against your context) and toxicity, and explains each failure.
+3. **Generate a corrective prompt (E₀ → P₁).** The failures become a targeted correction ("you violated X because Y; keep doing Z"), with the tone set by how many instructions failed.
+4. **Iterative refinement (P₁ → R₁ … Pₙ → Rₙ).** Steps 2-4 repeat until everything passes, `max_iterations` is reached, or the latency budget runs out. The best draft seen is returned.
+
+The full original write-up, with the dataset, results and design reasoning, is in [docs/blog.md](docs/blog.md). **Note:** its numbers were measured with AIMon's original feedback model, not this repository's Together judge.
 
 ## Install
 

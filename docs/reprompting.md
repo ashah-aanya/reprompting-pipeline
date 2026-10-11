@@ -131,6 +131,20 @@ print(json.dumps(result["telemetry"], indent=2))
 
 The pipeline doesn't care where `context` comes from. Retrieve with any framework (LlamaIndex, LangChain, your own), join the chunks into one string, and pass it as `context`. Groundedness is then checked against exactly what you retrieved.
 
+## Differences from the original blog post
+
+The 2025 [blog post](blog.md) describes the original system. This implementation differs in these ways:
+
+| | Blog post | This implementation |
+|---|---|---|
+| Feedback model | AIMon's IFE model | An LLM judge on Together AI ([judge.md](judge.md)) |
+| Default max iterations | 3 | **2** (`max_iterations`) |
+| Choosing the best draft | The draft with the fewest failed instructions; ties broken by lowest residual error | The draft with the lowest **residual error** (`_select_best_iteration`). This usually, but not always, agrees with "fewest failed instructions" |
+| Residual error inputs | Groundedness and instruction adherence | Groundedness, instruction adherence **and toxicity** (`1 - P(toxic)`) |
+| Reported results | ~22% instruction-adherence gain on a 1,000-sample set | **None.** Not reproduced with the Together judge |
+
+The selection and iteration-default differences already existed in the original SDK code; they are documented here rather than changed so the pipeline's behavior stays the same.
+
 ## Limitations
 
 - Needs clear, checkable instructions. Vague or contradictory ones cannot be fixed.
