@@ -2,7 +2,7 @@
 
 By Aanya Shah. First published at [ashah-aanya.github.io/re-prompting.html](https://ashah-aanya.github.io/re-prompting.html); written during my internship at AIMon in summer 2025.
 
-> **Read this first.** This is the original technical blog post, reproduced as written. Its results (the ~22% improvement, the 1,000-sample dataset, the latency numbers) were measured in 2025 with **AIMon's Instruction Following Evaluation (IFE) model** as the feedback model. This repository replaces that model with an LLM judge running on Together AI, so **those numbers describe the original system, not this repository's judge, and have not been reproduced here.** Links to AIMon's GitHub repository below point to the original location, which may no longer be available; this repository is the standalone continuation.
+> **Read this first.** This is the original technical blog post, reproduced as written. Its results (the ~22% improvement, the 1,000-sample dataset, the latency numbers) were measured in 2025 with **AIMon's Instruction Following Evaluation (IFE) model** as the feedback model. This repository replaces that model with an LLM judge running on Together AI, so **those numbers describe the original system, not this repository's judge, and have not been evaluated here.**
 
 ## Overview
 
