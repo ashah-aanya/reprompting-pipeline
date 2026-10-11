@@ -250,4 +250,4 @@ While re-prompting significantly improves instruction adherence, its effectivene
 
 ## Conclusion
 
-Ultimately, re-prompting did boost instruction-following rates by ~22% on average. If you want to try it yourself, check out AIMon’s [open-source framework and API](https://github.com/aimonlabs/aimon-python-sdk) to integrate re-prompting into your workflows.
+Ultimately, re-prompting did boost instruction-following rates by ~22% on average. If you want to try it yourself, check out the starter code in this repo to integrate re-prompting into your workflows.
