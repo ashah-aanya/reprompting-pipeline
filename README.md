@@ -114,11 +114,7 @@ python evals/run_judge_eval.py --dry-run
 
 ## Origin
 
-I built the first version of this pipeline as the re-prompting API during my internship at AIMon (summer 2025), as part of AIMon's open-source Python SDK, where it called AIMon's hosted detector. This repository is an independent, standalone continuation: it extracts that code and replaces the detector with the LLM judge in `src/reprompting_pipeline/judge.py` (Together AI), so it keeps working on its own.
-
-This project is not affiliated with or endorsed by AIMon.
-
-**About the git history.** The commits from July 2025 are the original development history, extracted from the SDK repository with `git filter-repo` and limited to the re-prompting code. Commit hashes therefore differ from the originals, and the author email was replaced with a GitHub noreply address; dates, authorship and commit contents are preserved (a few messages were lightly reworded to remove names and links). The standalone port to Together AI is the most recent commit, from October 2026.
+I built the first version of this pipeline as the re-prompting API during my internship at AIMon (summer 2025), as part of AIMon's open-source Python SDK, where it called AIMon's hosted detector. 
 
 ## License
 
