@@ -114,7 +114,7 @@ python evals/run_judge_eval.py --dry-run
 
 ## Origin
 
-I built the first version of this pipeline as the re-prompting API during my internship at AIMon (summer 2025), as part of AIMon's open-source Python SDK, where it called AIMon's hosted detector. 
+I built the first version of this pipeline as the re-prompting API during my internship at AIMon (summer 2025), as part of AIMon's open-source Python SDK, where it called AIMon's hosted detector. This version instead leverages a small model to serve as an evaluator.
 
 ## License
 
